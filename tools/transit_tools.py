@@ -7,8 +7,8 @@ around a given lat/lon coordinate in Pune, India.
 Uses only Python stdlib -- no additional dependencies required.
 """
 
+import asyncio
 import json
-import math
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,21 +16,10 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from tools.geo import haversine_km
+
 OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
 DEFAULT_TIMEOUT_SECS = 25
-EARTH_RADIUS_KM = 6371.0
-
-
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Calculate great-circle distance between two points in km."""
-    lat1_r, lat2_r = math.radians(lat1), math.radians(lat2)
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlon / 2) ** 2
-    )
-    return EARTH_RADIUS_KM * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def _build_overpass_query(lat: float, lon: float, radius_m: int) -> str:
@@ -39,7 +28,6 @@ def _build_overpass_query(lat: float, lon: float, radius_m: int) -> str:
     Bus stops are queried with a smaller radius (500m max) to avoid
     timeout due to the high density of bus stops in Pune.
     """
-    # Bus stops are very numerous - use smaller radius to avoid timeout
     bus_radius = min(radius_m, 500)
 
     return (
@@ -85,6 +73,11 @@ def _query_overpass(query: str) -> dict[str, Any]:
         return json.loads(resp.read().decode("utf-8"))
 
 
+async def _query_overpass_async(query: str) -> dict[str, Any]:
+    """Async wrapper around _query_overpass to avoid blocking the event loop."""
+    return await asyncio.to_thread(_query_overpass, query)
+
+
 @tool
 async def check_transit_proximity(
     lat: float, lon: float, radius_km: float = 2.0
@@ -110,7 +103,7 @@ async def check_transit_proximity(
     query = _build_overpass_query(lat, lon, radius_m)
 
     try:
-        result = _query_overpass(query)
+        result = await _query_overpass_async(query)
     except urllib.error.URLError as e:
         return json.dumps({"error": f"Overpass API request failed: {e}"})
     except json.JSONDecodeError as e:
@@ -130,14 +123,13 @@ async def check_transit_proximity(
         tags = elem.get("tags", {})
         name = tags.get("name") or tags.get("name:en", f"Unnamed ({elem.get('id')})")
 
-        # Deduplicate by name (some stations have multiple OSM nodes)
         key = (name.strip().lower(), round(elem.get("lat", 0), 4))
         if key in seen:
             continue
         seen.add(key)
 
         distance_km = round(
-            _haversine_km(lat, lon, elem.get("lat", 0), elem.get("lon", 0)), 2
+            haversine_km(lat, lon, elem.get("lat", 0), elem.get("lon", 0)), 2
         )
 
         entry = {
@@ -160,12 +152,10 @@ async def check_transit_proximity(
         elif category == "bus_station":
             categorized["bus_stations"].append(entry)
 
-    # Sort each category by distance, limit bus stops to nearest 10
     for key in categorized:
         categorized[key].sort(key=lambda x: x["distance_km"])
     categorized["bus_stops"] = categorized["bus_stops"][:10]
 
-    # Add summary
     summary = {
         "query_point": {"lat": lat, "lon": lon},
         "radius_km": radius_km,

@@ -1,3 +1,5 @@
+import asyncio
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -41,7 +43,7 @@ Note that GIS and land records data are for preliminary screening only.
 """
 
 
-def main():
+async def main():
     print("Initializing UDCPR vector store...")
     chunk_count = init_udcpr_store()
     print(f"UDCPR store ready: {chunk_count} chunks")
@@ -84,7 +86,7 @@ def main():
 
         messages.append({"role": "user", "content": user_input})
 
-        result = agent.invoke({"messages": messages})
+        result = await agent.ainvoke({"messages": messages})
 
         assistant_msg = result["messages"][-1]
         print(f"\nrerAI: {assistant_msg.content}\n")
@@ -93,4 +95,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

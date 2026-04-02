@@ -6,6 +6,7 @@ Automates the Mahabhulekh (Maharashtra land records) portal to extract
 Uses Playwright for browser automation and BeautifulSoup for HTML parsing.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -98,8 +99,12 @@ def _parse_7_12_html(html: str) -> dict:
         "raw_extract_available": False,
     }
 
-    # Check if we got a valid extract page
-    if "7/12" in html or "Satbara" in html or "सातबारा" in html:
+    extract_table = soup.find("table", id="ExtractData") or soup.find(
+        "table", class_="extract-table"
+    )
+    if extract_table:
+        result["raw_extract_available"] = True
+    elif soup.find("table") and any(kw in html for kw in ["सातबारा", "गाव", "हेक्टर"]):
         result["raw_extract_available"] = True
 
     # Try to extract village/taluka/district from headers
@@ -390,8 +395,16 @@ async def _fetch_7_12_with_playwright(
             raise
         except Exception as e:
             if attempt < max_retries - 1:
-                await page.wait_for_timeout(NAVIGATION_DELAY * 2)
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+                await asyncio.sleep(NAVIGATION_DELAY * 2 / 1000)
                 continue
+            try:
+                await browser.close()
+            except Exception:
+                pass
             return {
                 "error": f"Failed to fetch 7/12 extract after {max_retries} attempts: {str(e)}",
                 "district": district,
@@ -399,14 +412,6 @@ async def _fetch_7_12_with_playwright(
                 "village": village,
                 "survey_number": survey_no,
             }
-
-    return {
-        "error": "Unknown error occurred",
-        "district": district,
-        "taluka": taluka,
-        "village": village,
-        "survey_number": survey_no,
-    }
 
 
 @tool
@@ -450,10 +455,15 @@ async def fetch_7_12_extract(
 async def fetch_property_card(
     district: str, taluka: str, village: str, survey_no: str
 ) -> str:
-    """Fetch Property Card (Malmatta Patrak) from Mahabhulekh portal.
+    """Provide guidance for obtaining Property Card (Malmatta Patrak) data.
 
     Property cards are for urban/city survey areas and contain property
     tax assessment, building details, and ownership information.
+
+    NOTE: This tool does not currently fetch property card data directly.
+    It returns guidance on where to find property cards, as urban property
+    records are typically managed by municipal corporations (PMC/PCMC)
+    rather than the Mahabhulekh portal.
 
     Args:
         district: District name (e.g., "Pune", "Pimpri Chinchwad")
@@ -462,12 +472,7 @@ async def fetch_property_card(
         survey_no: City survey number or property number
 
     Returns:
-        JSON string with property card data.
-
-    Note:
-        Property cards may be on a different section of the portal or
-        a separate municipal website (PMC/PCMC). This tool attempts
-        Mahabhulekh first, then provides guidance if not available.
+        JSON string with guidance on obtaining property card data.
     """
     # Property cards for urban areas are often separate from 7/12
     # For now, attempt to query and provide helpful guidance
