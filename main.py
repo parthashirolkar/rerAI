@@ -6,11 +6,20 @@ from deepagents import create_deep_agent  # noqa: E402
 
 from subagents.definitions import ALL_SUBAGENTS  # noqa: E402
 from tools.config import get_chat_model  # noqa: E402
+from tools.gis_tools import (  # noqa: E402
+    check_development_plan,
+    query_pmrda_layer,
+)
+from tools.land_records_tools import (  # noqa: E402
+    fetch_7_12_extract,
+    fetch_property_card,
+)
 from tools.rera_tools import (  # noqa: E402
     get_rera_project_details,
     search_rera_projects,
 )
 from tools.regulatory_tools import init_udcpr_store, query_udcpr  # noqa: E402
+from tools.transit_tools import check_transit_proximity  # noqa: E402
 
 SYSTEM_PROMPT = """\
 You are rerAI, an autonomous permitting assistant for Pune, Maharashtra, India.
@@ -23,9 +32,12 @@ Given a plot query (address, survey/gat number, or coordinates), you:
 Available subagents:
 - rera-analyst: Search MahaRERA projects by district, check developer compliance
 - regulatory-checker: Query UDCPR building regulations (FSI, setbacks, parking, fire norms)
+- gis-analyst: Analyze spatial context - transit proximity, PMRDA jurisdiction, development zones
+- title-verifier: Verify land title and ownership from Mahabhulekh 7/12 extracts
 
 Always cite regulation clause numbers and page references.
 State assumptions clearly when data is incomplete.
+Note that GIS and land records data are for preliminary screening only.
 """
 
 
@@ -38,7 +50,16 @@ def main():
 
     agent = create_deep_agent(
         model=model,
-        tools=[search_rera_projects, get_rera_project_details, query_udcpr],
+        tools=[
+            search_rera_projects,
+            get_rera_project_details,
+            query_udcpr,
+            check_transit_proximity,
+            query_pmrda_layer,
+            check_development_plan,
+            fetch_7_12_extract,
+            fetch_property_card,
+        ],
         subagents=ALL_SUBAGENTS,
         memory=["./memory/AGENT_KNOWLEDGE.md"],
         skills=["./skills/"],

@@ -1,6 +1,9 @@
 from tools.config import get_subagent_model
+from tools.gis_tools import check_development_plan, query_pmrda_layer
+from tools.land_records_tools import fetch_7_12_extract, fetch_property_card
 from tools.rera_tools import get_rera_project_details, search_rera_projects
 from tools.regulatory_tools import query_udcpr
+from tools.transit_tools import check_transit_proximity
 
 _subagent_model = get_subagent_model()
 
@@ -38,4 +41,49 @@ regulatory_checker = {
     "tools": [query_udcpr],
 }
 
-ALL_SUBAGENTS = [rera_analyst, regulatory_checker]
+gis_analyst = {
+    "name": "gis-analyst",
+    "model": _subagent_model,
+    "description": (
+        "Analyze spatial context for plots in Pune Metropolitan Region. "
+        "Query transit proximity (metro, railway, bus), PMRDA GIS layers for "
+        "jurisdiction boundaries, development plan zones, building permissions, "
+        "and environmental overlays. Use for location assessment."
+    ),
+    "system_prompt": (
+        "You are a GIS spatial analyst for Pune, Maharashtra. Given coordinates "
+        "or location queries, analyze the spatial context including: "
+        "(1) Transit proximity via OpenStreetMap - nearest metro, railway, bus stops; "
+        "(2) PMRDA jurisdiction - village, taluka boundaries; "
+        "(3) Development context - nearby building permissions, metro line proximity; "
+        "(4) Environmental zones - wildlife sanctuaries, forest overlays. "
+        "Return a structured location assessment with distances and zone classifications. "
+        "Note that GIS data is for preliminary screening only."
+    ),
+    "tools": [check_transit_proximity, query_pmrda_layer, check_development_plan],
+}
+
+title_verifier = {
+    "name": "title-verifier",
+    "model": _subagent_model,
+    "description": (
+        "Verify land title and ownership from Mahabhulekh land records. "
+        "Fetch 7/12 (Satbara) extracts and property cards to identify "
+        "current owners, land classification, encumbrances, and area discrepancies."
+    ),
+    "system_prompt": (
+        "You are a land title verification specialist for Maharashtra. "
+        "Given district, taluka, village, and survey/gat number, fetch the "
+        "7/12 extract from Mahabhulekh portal and analyze: "
+        "(1) Current owners and their shares; "
+        "(2) Land classification (agricultural, NA, gairan, etc.); "
+        "(3) Total area vs pot kharab (unusable land); "
+        "(4) Rights, liabilities, and encumbrances; "
+        "(5) Any discrepancies or red flags. "
+        "Return a structured title assessment. Note that Mahabhulekh data is "
+        "for informational purposes per portal disclaimer, not for legal use."
+    ),
+    "tools": [fetch_7_12_extract, fetch_property_card],
+}
+
+ALL_SUBAGENTS = [rera_analyst, regulatory_checker, gis_analyst, title_verifier]

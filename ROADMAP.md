@@ -23,53 +23,61 @@
 
 ---
 
-## Phase 2 — Spatial & Land Records
+## Phase 2 — Spatial & Land Records ✅ COMPLETE
 
 ### 2A: GIS Spatial Tools (`tools/gis_tools.py`)
 
-**Purpose:** Given coordinates or an address, determine plot-level spatial context — land use zoning, flood zones, transit proximity, infrastructure availability.
+**Status:** ✅ Implemented
 
-**Data sources to explore:**
+**Purpose:** Given coordinates or an address, determine plot-level spatial context — transit proximity, jurisdiction boundaries, development zones, environmental overlays.
 
-| Source | What it provides | Access method |
-|---|---|---|
-| **IUDX** (India Urban Data Exchange) | City-level sensor data, water supply, traffic, drainage | Public REST API at `data.iudx.org.in` |
-| **Bhuvan** (ISRO's geo-platform) | WMS/WFS map tiles — land use, contour, flood hazard, watershed | Public WMS endpoints at `bhuvan.nrsc.gov.in` |
-| **PMC Open Data** (Pune Municipal Corporation) | Development plan zones, DP remarks, building permissions | `opendata.punecorporation.org` or scraping `pmc.gov.in` |
-| **OpenStreetMap** | Roads, transit stations, landmarks, building footprints | Overpass API (`overpass-api.de`) |
-| **PMRDA** | Regional plan zones, metro corridor planning | `pmrda.gov.in` (scraping) |
+**Data sources implemented:**
 
-**Tools to build:**
+| Source | What it provides | Access method | Status |
+|---|---|---|---|
+| **OpenStreetMap** | Metro stations, railway stations, bus stops | Overpass API (`overpass-api.de`) | ✅ ACTIVE |
+| **PMRDA GIS** | Village/taluka boundaries, building permissions, metro lines, environmental zones | REST API + WMS at `gis.pmrda.gov.in` | ✅ ACTIVE |
+| IUDX (India Urban Data Exchange) | City-level sensor data, water supply, traffic | Public REST API | ❌ DEGRADED |
+| Bhuvan (ISRO's geo-platform) | WMS/WFS map tiles — land use, contour, flood hazard | Public WMS endpoints | ⚠️ LIMITED |
+| PMC Open Data | Development plan zones, DP remarks, building permissions | `opendata.punecorporation.org` | ❌ DOWN |
 
-- `query_pmc_development_plan(lat, lon) -> str` — Given coordinates, return the DP zoning (residential, commercial, industrial, etc.) and any special reservations
-- `check_flood_zone(lat, lon) -> str` — Check if plot falls in a flood-prone area (Bhuvan flood hazard layer or PMC drainage data)
-- `check_transit_proximity(lat, lon, radius_km) -> str` — Find nearest metro station, bus depot, railway station using OSM Overpass
-- `check_infrastructure(lat, lon) -> str` — Water supply, sewage, road width from IUDX/PMC data
+**Tools implemented:**
+
+- ✅ `check_transit_proximity(lat, lon, radius_km) -> str` — Find nearest metro station, railway station, bus stops using OSM Overpass
+- ✅ `query_pmrda_layer(layer_name, lat, lon, radius_m) -> str` — Query specific PMRDA GIS layer for features
+- ✅ `check_development_plan(lat, lon) -> str` — Comprehensive spatial context (jurisdiction, transit, permissions, environmental zones)
+
+**Deferred:**
+- `check_flood_zone()` — Bhuvan WMS requires undocumented `map` parameter paths
+- `check_infrastructure()` — IUDX/PMC APIs unavailable
 
 **Subagent: `gis-analyst`**
 - Model: `nvidia/nemotron-3-nano-30b-a3b:free` via OpenRouter
-- Tools: All GIS tools above
+- Tools: `check_transit_proximity`, `query_pmrda_layer`, `check_development_plan`
 - System prompt: Spatial analyst for Pune plots, returns structured location assessment
 
 ### 2B: Land Records Tools (`tools/land_records_tools.py`)
 
+**Status:** ✅ Implemented
+
 **Purpose:** Given a survey/gat number and village name, extract 7/12 (Satbara) and Property Card data — ownership, land classification, area, encumbrances.
 
-**Data source:** Mahabhulekh (`mahabhulekh.maharashtra.gov.in` / `bhulekh.mahabhubblekh.com`)
+**Data source:** Mahabhulekh (`mahabhulekh.maharashtra.gov.in`)
 - Publicly accessible — no API key needed
-- Requires Playwright for navigating the multi-step form (State → District → Taluka → Village → Survey No.)
+- Requires Playwright for navigating the multi-step form (Division → District → Taluka → Village → Survey No.)
 - Returns 7/12 extract with: owner names, land area, classification (agri/NA/ghairan), rights, liabilities
 
-**Tools to build:**
+**Tools implemented:**
 
-- `fetch_7_12_extract(district: str, taluka: str, village: str, survey_no: str) -> str` — Playwright automation to navigate Mahabhulekh and extract 7/12 data
-- `fetch_property_card(district: str, taluka: str, village: str, survey_no: str) -> str` — Extract property card (Malmatta Patrak) data
+- ✅ `fetch_7_12_extract(district, taluka, village, survey_no) -> str` — Playwright automation to navigate Mahabhulekh and extract 7/12 data
+- ✅ `fetch_property_card(district, taluka, village, survey_no) -> str` — Returns guidance for property cards (typically managed by municipalities, not revenue dept)
 
 **Technical notes:**
-- Playwright is already a dependency
-- Mahabhulekh uses dynamic dropdowns (select district → loads talukas → loads villages)
-- Rate limiting and polite delays needed
-- May need OCR if the extract is rendered as an image
+- Playwright automation handles popup windows and cascading dropdowns
+- BeautifulSoup parsing for HTML table extraction
+- Local caching of dropdown values to reduce portal load
+- Retry logic with exponential backoff for portal unreliability
+- Output in Marathi (Sakal Marathi Normal font)
 
 **Subagent: `title-verifier`**
 - Model: `nvidia/nemotron-3-nano-30b-a3b:free` via OpenRouter
