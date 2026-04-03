@@ -104,15 +104,11 @@ def _extract_project_from_card(card_soup) -> Optional[dict]:
             return ""
 
         view_url = ""
-        original_url = ""
         for link in card_soup.find_all("a", href=True):
             href = link.get("href", "")
             text = link.get_text(strip=True)
-            if "public/project/view/" in href:
-                if "isOriginal=true" in href:
-                    original_url = href
-                elif text == "View Details":
-                    view_url = href
+            if "public/project/view/" in href and text == "View Details":
+                view_url = href
 
         if rera_id and project_name:
             return {
@@ -120,11 +116,7 @@ def _extract_project_from_card(card_soup) -> Optional[dict]:
                 "project_name": project_name,
                 "promoter": promoter,
                 "district": get_field_value("District"),
-                "state": get_field_value("State"),
-                "pincode": get_field_value("Pincode"),
-                "last_modified": get_field_value("Last Modified"),
                 "view_url": view_url,
-                "original_url": original_url,
             }
     except Exception:
         pass
@@ -149,7 +141,7 @@ def _get_total_pages(html: str) -> int:
     return 1
 
 
-async def _fetch_projects(district_name: str, max_pages: int = 2) -> list[dict]:
+async def _fetch_projects(district_name: str, max_pages: int = 1) -> list[dict]:
     district_code = await _resolve_district_code(district_name)
 
     search_url = (
@@ -204,19 +196,19 @@ async def _fetch_projects(district_name: str, max_pages: int = 2) -> list[dict]:
 
 
 @tool
-async def search_rera_projects(district_name: str, max_pages: int = 2) -> str:
+async def search_rera_projects(district_name: str, max_pages: int = 1) -> str:
     """Search MahaRERA registered projects by district name.
 
-    Returns a JSON array of projects with RERA ID, name, promoter, district,
-    pincode, and view URL. Each page has ~10 projects. Use max_pages to
-    control breadth (default 2 = ~20 projects).
+    Returns a JSON array of projects with RERA ID, name, promoter, and district.
+    Each page has ~10 projects. Use max_pages to control breadth (default 1).
 
     Args:
         district_name: District name in Maharashtra (e.g. "Pune", "Mumbai City")
-        max_pages: Number of result pages to fetch (default 2)
+        max_pages: Number of result pages to fetch (default 1)
     """
     projects = await _fetch_projects(district_name, max_pages)
-    return json.dumps(projects, indent=2)
+    trimmed = projects[:5]
+    return json.dumps(trimmed, ensure_ascii=False)
 
 
 @tool
@@ -259,7 +251,7 @@ async def get_rera_project_details(view_url: str) -> str:
     if all_responses:
         _, status, body = all_responses[0]
         if status == 200:
-            return body[:8000]
+            return body[:2500]
         return f"API returned status {status}: {body[:500]}"
 
     html_text = None
@@ -273,7 +265,7 @@ async def get_rera_project_details(view_url: str) -> str:
         await browser.close()
 
     if html_text and len(html_text.strip()) > 100:
-        return html_text[:8000]
+        return html_text[:2500]
 
     return (
         "Could not extract project details. The MahaRERA detail portal is a "

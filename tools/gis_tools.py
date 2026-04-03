@@ -127,19 +127,20 @@ async def query_pmrda_layer(
                     "features": [],
                     "note": "No features found in this area. The plot may be outside PMRDA jurisdiction or in a different layer.",
                 },
-                indent=2,
                 ensure_ascii=False,
             )
 
+        compact_features = []
         for feat in features:
+            props = feat.get("properties", {})
             geom = feat.get("geometry", {})
+            entry = {"properties": props}
             if geom.get("type") == "Point":
                 coords = geom.get("coordinates", [lon, lat])
-                feat["distance_km"] = round(
+                entry["distance_km"] = round(
                     haversine_km(lat, lon, coords[1], coords[0]), 3
                 )
-            else:
-                feat["distance_km"] = None
+            compact_features.append(entry)
 
         return json.dumps(
             {
@@ -147,10 +148,9 @@ async def query_pmrda_layer(
                 "layer_description": KEY_LAYERS.get(layer_name, ""),
                 "query_point": {"lat": lat, "lon": lon},
                 "radius_m": radius_m,
-                "found": len(features),
-                "features": features,
+                "found": len(compact_features),
+                "features": compact_features,
             },
-            indent=2,
             ensure_ascii=False,
         )
 
@@ -161,7 +161,6 @@ async def query_pmrda_layer(
                 "layer": layer_name,
                 "query_point": {"lat": lat, "lon": lon},
             },
-            indent=2,
         )
     except json.JSONDecodeError as e:
         return json.dumps(
@@ -169,7 +168,6 @@ async def query_pmrda_layer(
                 "error": f"Failed to parse PMRDA response: {e}",
                 "layer": layer_name,
             },
-            indent=2,
         )
 
 
@@ -305,4 +303,4 @@ async def check_development_plan(lat: float, lon: float) -> str:
             len(env_features) > 0 if env_features is not None else None
         )
 
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return json.dumps(result, ensure_ascii=False)

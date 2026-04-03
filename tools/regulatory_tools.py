@@ -107,7 +107,7 @@ def init_udcpr_store() -> int:
 
 
 @tool
-async def query_udcpr(question: str, n_results: int = 5) -> str:
+async def query_udcpr(question: str, n_results: int = 3) -> str:
     """Query the Maharashtra UDCPR building regulations using semantic search.
 
     Searches the UDCPR corpus (updated to Jan 2025) for clauses relevant
@@ -118,7 +118,7 @@ async def query_udcpr(question: str, n_results: int = 5) -> str:
 
     Args:
         question: Natural language question about building regulations
-        n_results: Number of relevant chunks to return (default 5)
+        n_results: Number of relevant chunks to return (default 3)
     """
     vs = _get_vector_store()
     results = vs.similarity_search_with_score(question, k=n_results)
@@ -130,8 +130,9 @@ async def query_udcpr(question: str, n_results: int = 5) -> str:
     for doc, score in results:
         source = doc.metadata.get("source", "unknown")
         page = doc.metadata.get("page", "?")
+        content = doc.page_content[:500]
         output_parts.append(
-            f"[{source}, page {page}] (relevance: {1 - score:.3f})\n{doc.page_content}"
+            f"[{source}, page {page}] (relevance: {1 - score:.3f})\n{content}"
         )
 
     return "\n\n---\n\n".join(output_parts)

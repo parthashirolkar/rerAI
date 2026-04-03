@@ -448,7 +448,8 @@ async def fetch_7_12_extract(
         This is for informational purposes only per portal disclaimer.
     """
     result = await _fetch_7_12_with_playwright(district, taluka, village, survey_no)
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    cleaned = {k: v for k, v in result.items() if v is not None and v != "" and v != []}
+    return json.dumps(cleaned, ensure_ascii=False)
 
 
 @tool
@@ -498,4 +499,4 @@ async def fetch_property_card(
         ],
     }
 
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return json.dumps(result, ensure_ascii=False)
