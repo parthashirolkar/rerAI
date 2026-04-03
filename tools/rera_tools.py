@@ -208,7 +208,10 @@ async def search_rera_projects(district_name: str, max_pages: int = 1) -> str:
     """
     projects = await _fetch_projects(district_name, max_pages)
     trimmed = projects[:5]
-    return json.dumps(trimmed, ensure_ascii=False)
+    return json.dumps(
+        {"projects": trimmed, "total_available": len(projects)},
+        ensure_ascii=False,
+    )
 
 
 @tool

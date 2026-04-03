@@ -17,6 +17,29 @@ from langchain_core.tools import tool
 
 from tools.geo import haversine_km
 
+
+def _centroid(geom: dict) -> tuple[float, float]:
+    coords = geom.get("coordinates", [])
+    geom_type = geom.get("type", "")
+
+    flat: list[float] = []
+    if geom_type == "Point":
+        flat = coords  # type: ignore[assignment]
+    elif geom_type in ("LineString", "MultiPoint"):
+        flat = [c for pair in coords for c in pair]  # type: ignore[union-attr]
+    elif geom_type in ("Polygon", "MultiLineString"):
+        flat = [c for ring in coords for pair in ring for c in pair]  # type: ignore[union-attr]
+    elif geom_type == "MultiPolygon":
+        flat = [c for poly in coords for ring in poly for pair in ring for c in pair]  # type: ignore[union-attr]
+
+    if not flat or len(flat) < 2:
+        return 0.0, 0.0
+
+    lons = flat[0::2]
+    lats = flat[1::2]
+    return sum(lons) / len(lons), sum(lats) / len(lats)
+
+
 PMRDA_GIS_API_URL = "https://gis.pmrda.gov.in/api"
 PMRDA_WMS_URL = "https://gismap.pmrda.gov.in:8443/cgi-bin/IGiS_Ent_service.exe"
 DEFAULT_TIMEOUT_SECS = 30
@@ -135,10 +158,17 @@ async def query_pmrda_layer(
             props = feat.get("properties", {})
             geom = feat.get("geometry", {})
             entry = {"properties": props}
-            if geom.get("type") == "Point":
+            geom_type = geom.get("type", "Unknown")
+            if geom_type == "Point":
                 coords = geom.get("coordinates", [lon, lat])
                 entry["distance_km"] = round(
                     haversine_km(lat, lon, coords[1], coords[0]), 3
+                )
+            else:
+                centroid_lon, centroid_lat = _centroid(geom)
+                entry["geometry_type"] = geom_type
+                entry["distance_km"] = round(
+                    haversine_km(lat, lon, centroid_lat, centroid_lon), 3
                 )
             compact_features.append(entry)
 
