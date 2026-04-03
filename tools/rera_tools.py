@@ -204,7 +204,7 @@ async def _fetch_projects(district_name: str, max_pages: int = 2) -> list[dict]:
 
 
 @tool
-def search_rera_projects(district_name: str, max_pages: int = 2) -> str:
+async def search_rera_projects(district_name: str, max_pages: int = 2) -> str:
     """Search MahaRERA registered projects by district name.
 
     Returns a JSON array of projects with RERA ID, name, promoter, district,
@@ -215,45 +215,69 @@ def search_rera_projects(district_name: str, max_pages: int = 2) -> str:
         district_name: District name in Maharashtra (e.g. "Pune", "Mumbai City")
         max_pages: Number of result pages to fetch (default 2)
     """
-    projects = asyncio.get_event_loop().run_until_complete(
-        _fetch_projects(district_name, max_pages)
-    )
+    projects = await _fetch_projects(district_name, max_pages)
     return json.dumps(projects, indent=2)
 
 
 @tool
-def get_rera_project_details(view_url: str) -> str:
+async def get_rera_project_details(view_url: str) -> str:
     """Fetch detailed information from a MahaRERA project detail page.
 
-    Given a view_url from search_rera_results, scrapes the full project
+    Given a view_url from search_rera_projects, scrapes the full project
     detail page for compliance data, promoter info, and project status.
+    Note: The project detail portal is a single-page app (SPA). This tool
+    uses Playwright to render the page and extract content.
 
     Args:
-        view_url: The project detail URL (e.g. /public/project/view/12345)
+        view_url: The project detail URL (e.g. https://maharerait.maharashtra.gov.in/public/project/view/53)
     """
     full_url = view_url if view_url.startswith("http") else f"{BASE_URL}{view_url}"
 
-    async def _fetch():
-        html = await _fetch_html(full_url)
-        if not html:
-            return "Error: Could not fetch project detail page."
-        soup = BeautifulSoup(html, "html.parser")
+    from playwright.async_api import async_playwright
 
-        sections = {}
-        for heading in soup.find_all(["h4", "h5", "h3"]):
-            heading_text = heading.get_text(strip=True)
-            content_parts = []
-            sibling = heading.find_next_sibling()
-            count = 0
-            while sibling and count < 20:
-                text = sibling.get_text(strip=True)
-                if text and len(text) > 2:
-                    content_parts.append(text)
-                sibling = sibling.find_next_sibling()
-                count += 1
-            if content_parts:
-                sections[heading_text] = content_parts
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
 
-        return json.dumps(sections, indent=2, ensure_ascii=False)
+        all_responses = []
 
-    return asyncio.get_event_loop().run_until_complete(_fetch())
+        async def capture(resp):
+            if "/api/" in resp.url and "getProjectById" in resp.url:
+                try:
+                    body = await resp.text()
+                    all_responses.append((resp.url, resp.status, body))
+                except Exception:
+                    pass
+
+        page.on("response", capture)
+
+        await page.goto(full_url, wait_until="networkidle", timeout=30000)
+        await page.wait_for_timeout(5000)
+
+        await browser.close()
+
+    if all_responses:
+        _, status, body = all_responses[0]
+        if status == 200:
+            return body[:8000]
+        return f"API returned status {status}: {body[:500]}"
+
+    html_text = None
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.goto(full_url, wait_until="networkidle", timeout=30000)
+        await page.wait_for_timeout(5000)
+
+        html_text = await page.inner_text("body")
+        await browser.close()
+
+    if html_text and len(html_text.strip()) > 100:
+        return html_text[:8000]
+
+    return (
+        "Could not extract project details. The MahaRERA detail portal is a "
+        "single-page app that requires JavaScript rendering which may not work "
+        "in headless mode. Use search_rera_projects to get summary data, or "
+        f"visit the URL directly: {full_url}"
+    )

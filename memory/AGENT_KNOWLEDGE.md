@@ -24,9 +24,44 @@
 - RERA: MahaRERA portal (scraping)
 - Regulations: UDCPR PDF (ChromaDB RAG)
 
-## Data Sources (Phase 2, planned)
-- GIS: IUDX API, Bhuvan WMS/WFS, PMC Open Data Portal
-- Land Records: Mahabhulekh 7/12 extracts via Playwright
+## Data Sources (Phase 2 - COMPLETE)
+
+### Transit Proximity (OpenStreetMap / Overpass API)
+- **Endpoint**: https://overpass-api.de/api/interpreter
+- **Coverage**: Pune Metro (29+ stations), Indian Railways (6+ stations), Bus stops
+- **Tags**: `railway=station+station=subway` (metro), `railway=station+train=yes` (railway), `highway=bus_stop` (bus)
+- **Tool**: `check_transit_proximity(lat, lon, radius_km)`
+- **Rate limit**: ~2 req/sec, no authentication required
+
+### PMRDA GIS Portal
+- **REST API**: https://gis.pmrda.gov.in/api (462 endpoints)
+- **WMS Service**: https://gismap.pmrda.gov.in:8443/cgi-bin/IGiS_Ent_service.exe
+- **Coverage**: 35+ spatial layers including:
+  - Administrative: village, taluka boundaries
+  - Infrastructure: metro lines, roads, railways
+  - Permissions: building permissions, illegal constructions
+  - Environmental: wildlife sanctuaries, private forest overlays
+- **Authentication**: None required for read operations
+- **Tools**: `query_pmrda_layer()`, `check_development_plan()`
+
+### Mahabhulekh Land Records
+- **Portal**: https://mahabhulekh.maharashtra.gov.in
+- **Coverage**: 7/12 (Satbara) extracts for all Maharashtra villages
+- **Content**: Ownership, land classification (agri/NA/ghairan), area, rights/liabilities
+- **Technology**: ASP.NET with cascading dropdowns (Division → District → Taluka → Village)
+- **Language**: Marathi (Sakal Marathi Normal font)
+- **Tools**: `fetch_7_12_extract()`, `fetch_property_card()`
+- **Note**: Portal data is for informational purposes only per disclaimer
+
+### Data Source Status Summary
+| Source | Status | Pune Coverage | Auth Required |
+|--------|--------|---------------|---------------|
+| OpenStreetMap/Overpass | ACTIVE | Excellent (full) | None |
+| PMRDA GIS | ACTIVE | Excellent | None |
+| Mahabhulekh | ACTIVE | Full Maharashtra | None |
+| IUDX | DEGRADED | N/A (API down) | Token |
+| PMC Open Data | DOWN | N/A | N/A |
+| Bhuvan | LIMITED | Manual download only | None |
 
 ## Data Sources (Phase 3, planned)
 - Environmental: PARIVESH clearance portal, eco-sensitive zone boundaries

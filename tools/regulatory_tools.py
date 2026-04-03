@@ -107,7 +107,7 @@ def init_udcpr_store() -> int:
 
 
 @tool
-def query_udcpr(question: str, n_results: int = 5) -> str:
+async def query_udcpr(question: str, n_results: int = 5) -> str:
     """Query the Maharashtra UDCPR building regulations using semantic search.
 
     Searches the UDCPR corpus (updated to Jan 2025) for clauses relevant
