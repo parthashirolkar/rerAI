@@ -17,6 +17,29 @@ from langchain_core.tools import tool
 
 from tools.geo import haversine_km
 
+
+def _centroid(geom: dict) -> tuple[float, float]:
+    coords = geom.get("coordinates", [])
+    geom_type = geom.get("type", "")
+
+    flat: list[float] = []
+    if geom_type == "Point":
+        flat = coords  # type: ignore[assignment]
+    elif geom_type in ("LineString", "MultiPoint"):
+        flat = [c for pair in coords for c in pair]  # type: ignore[union-attr]
+    elif geom_type in ("Polygon", "MultiLineString"):
+        flat = [c for ring in coords for pair in ring for c in pair]  # type: ignore[union-attr]
+    elif geom_type == "MultiPolygon":
+        flat = [c for poly in coords for ring in poly for pair in ring for c in pair]  # type: ignore[union-attr]
+
+    if not flat or len(flat) < 2:
+        return 0.0, 0.0
+
+    lons = flat[0::2]
+    lats = flat[1::2]
+    return sum(lons) / len(lons), sum(lats) / len(lats)
+
+
 PMRDA_GIS_API_URL = "https://gis.pmrda.gov.in/api"
 PMRDA_WMS_URL = "https://gismap.pmrda.gov.in:8443/cgi-bin/IGiS_Ent_service.exe"
 DEFAULT_TIMEOUT_SECS = 30
@@ -127,19 +150,27 @@ async def query_pmrda_layer(
                     "features": [],
                     "note": "No features found in this area. The plot may be outside PMRDA jurisdiction or in a different layer.",
                 },
-                indent=2,
                 ensure_ascii=False,
             )
 
+        compact_features = []
         for feat in features:
+            props = feat.get("properties", {})
             geom = feat.get("geometry", {})
-            if geom.get("type") == "Point":
+            entry = {"properties": props}
+            geom_type = geom.get("type", "Unknown")
+            if geom_type == "Point":
                 coords = geom.get("coordinates", [lon, lat])
-                feat["distance_km"] = round(
+                entry["distance_km"] = round(
                     haversine_km(lat, lon, coords[1], coords[0]), 3
                 )
             else:
-                feat["distance_km"] = None
+                centroid_lon, centroid_lat = _centroid(geom)
+                entry["geometry_type"] = geom_type
+                entry["distance_km"] = round(
+                    haversine_km(lat, lon, centroid_lat, centroid_lon), 3
+                )
+            compact_features.append(entry)
 
         return json.dumps(
             {
@@ -147,10 +178,9 @@ async def query_pmrda_layer(
                 "layer_description": KEY_LAYERS.get(layer_name, ""),
                 "query_point": {"lat": lat, "lon": lon},
                 "radius_m": radius_m,
-                "found": len(features),
-                "features": features,
+                "found": len(compact_features),
+                "features": compact_features,
             },
-            indent=2,
             ensure_ascii=False,
         )
 
@@ -161,7 +191,6 @@ async def query_pmrda_layer(
                 "layer": layer_name,
                 "query_point": {"lat": lat, "lon": lon},
             },
-            indent=2,
         )
     except json.JSONDecodeError as e:
         return json.dumps(
@@ -169,7 +198,6 @@ async def query_pmrda_layer(
                 "error": f"Failed to parse PMRDA response: {e}",
                 "layer": layer_name,
             },
-            indent=2,
         )
 
 
@@ -305,4 +333,4 @@ async def check_development_plan(lat: float, lon: float) -> str:
             len(env_features) > 0 if env_features is not None else None
         )
 
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return json.dumps(result, ensure_ascii=False)

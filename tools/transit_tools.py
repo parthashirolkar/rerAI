@@ -135,12 +135,10 @@ async def check_transit_proximity(
         entry = {
             "name": name,
             "distance_km": distance_km,
-            "lat": elem.get("lat"),
-            "lon": elem.get("lon"),
-            "network": tags.get("network", ""),
-            "operator": tags.get("operator", ""),
-            "lines": tags.get("lines", ""),
         }
+
+        if tags.get("lines"):
+            entry["lines"] = tags["lines"]
 
         category = _classify_element(tags)
         if category == "metro_station":
@@ -154,7 +152,8 @@ async def check_transit_proximity(
 
     for key in categorized:
         categorized[key].sort(key=lambda x: x["distance_km"])
-    categorized["bus_stops"] = categorized["bus_stops"][:10]
+    for key in categorized:
+        categorized[key] = categorized[key][:3]
 
     summary = {
         "query_point": {"lat": lat, "lon": lon},
@@ -168,4 +167,4 @@ async def check_transit_proximity(
     }
 
     output = {"summary": summary, "results": categorized}
-    return json.dumps(output, indent=2, ensure_ascii=False)
+    return json.dumps(output, ensure_ascii=False)

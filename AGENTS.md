@@ -36,6 +36,13 @@ trigger: When to activate this skill
 ---
 ```
 
+## Debugging Guidelines
+
+- **Do NOT create test scripts** to debug tools or functions.
+- Use the Bash tool to run inline Python directly: `uv run python -c "..."`
+- Invoke tools via their async interface: `asyncio.run(tool.ainvoke({...}))`
+- Check output length and content to verify fixes work as expected.
+
 ## Key Dependencies
 
 - `deepagents`: Agent orchestration framework
