@@ -18,7 +18,7 @@ from langchain_core.tools import tool
 from tools.geo import haversine_km
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-DEFAULT_TIMEOUT_SECS = 15
+NOMINATIM_TIMEOUT = 15
 
 
 def _centroid(geom: dict) -> tuple[float, float]:
@@ -61,7 +61,7 @@ def _geocode_sync(address: str) -> dict[str, Any]:
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT_SECS) as resp:
+    with urllib.request.urlopen(req, timeout=NOMINATIM_TIMEOUT) as resp:
         results = json.loads(resp.read().decode("utf-8"))
 
     if not results:
@@ -109,7 +109,7 @@ async def geocode_address(address: str) -> str:
 
 PMRDA_GIS_API_URL = "https://gis.pmrda.gov.in/api"
 PMRDA_WMS_URL = "https://gismap.pmrda.gov.in:8443/cgi-bin/IGiS_Ent_service.exe"
-DEFAULT_TIMEOUT_SECS = 30
+PMRDA_TIMEOUT = 30
 
 KEY_LAYERS = {
     "boundary_village": "Village boundaries",
@@ -137,7 +137,7 @@ def _make_request(
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT_SECS) as resp:
+    with urllib.request.urlopen(req, timeout=PMRDA_TIMEOUT) as resp:
         raw = resp.read().decode("utf-8")
         if not raw.strip():
             return {"type": "FeatureCollection", "features": []}

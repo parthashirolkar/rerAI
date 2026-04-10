@@ -24,6 +24,12 @@ from bs4 import BeautifulSoup
 from langchain_community.document_loaders import AsyncHtmlLoader
 from langchain_core.tools import tool
 
+from tools.config import (
+    MAHARERA_CRYPTOJS_KEY,
+    MAHARERA_PUBLIC_PASSWORD,
+    MAHARERA_PUBLIC_USERNAME,
+)
+
 BASE_URL = "https://maharera.maharashtra.gov.in"
 DIVISION_API = f"{BASE_URL}/get-division-data"
 DISTRICT_API = f"{BASE_URL}/div-district-data"
@@ -40,9 +46,9 @@ MAHARERA_LOGIN_API = (
     "https://maharerait.maharashtra.gov.in/api/maha-rera-login-service/login"
 )
 
-CRYPTOJS_KEY = "sdjhfsdkjgkls74385385"
-_PUBLIC_USERNAME = "@maharera_public_view"
-_PUBLIC_PASSWORD = "Maharera!@$1"
+CRYPTOJS_KEY = MAHARERA_CRYPTOJS_KEY
+_PUBLIC_USERNAME = MAHARERA_PUBLIC_USERNAME
+_PUBLIC_PASSWORD = MAHARERA_PUBLIC_PASSWORD
 
 _cached_token: Optional[str] = None
 _token_issued_at: float = 0.0

@@ -4,6 +4,7 @@ load_dotenv()
 
 from deepagents import create_deep_agent  # noqa: E402
 
+# Re-export for consumers
 from subagents.definitions import ALL_SUBAGENTS  # noqa: E402
 from tools.config import get_chat_model  # noqa: E402
 from tools.gis_tools import (  # noqa: E402
@@ -82,7 +83,20 @@ ALL_TOOLS = [
     check_development_plan,
 ]
 
-init_udcpr_store()
+
+# Defer ChromaDB initialization to avoid side effects at import time
+_udcpr_store_initialized = False
+
+
+def initialize_udcpr_store() -> int:
+    """Initialize the UDCPR vector store. Call this before using query_udcpr."""
+    global _udcpr_store_initialized
+    if not _udcpr_store_initialized:
+        chunk_count = init_udcpr_store()
+        _udcpr_store_initialized = True
+        return chunk_count
+    return 0
+
 
 graph = create_deep_agent(
     model=get_chat_model(),
