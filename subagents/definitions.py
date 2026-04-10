@@ -1,6 +1,5 @@
 from tools.config import get_subagent_model
-from tools.gis_tools import check_development_plan, query_pmrda_layer
-from tools.land_records_tools import fetch_7_12_extract, fetch_property_card
+from tools.gis_tools import check_development_plan, geocode_address, query_pmrda_layer
 from tools.rera_tools import get_rera_project_details, search_rera_projects
 from tools.regulatory_tools import query_udcpr
 from tools.transit_tools import check_transit_proximity
@@ -49,10 +48,6 @@ rera_analyst = {
         "</output_format>"
     ),
     "tools": [search_rera_projects, get_rera_project_details],
-    "interrupt_on": {
-        search_rera_projects.name: True,
-        get_rera_project_details.name: True,
-    },
 }
 
 regulatory_checker = {
@@ -95,7 +90,6 @@ regulatory_checker = {
         "</output_format>"
     ),
     "tools": [query_udcpr],
-    "interrupt_on": {query_udcpr.name: True},
 }
 
 gis_analyst = {
@@ -113,18 +107,20 @@ gis_analyst = {
         "</role>\n"
         "\n"
         "<goal>\n"
-        "Given coordinates or a location query, produce a structured location assessment\n"
+        "Given an address or location description, produce a structured location assessment\n"
         "covering transit proximity, jurisdiction boundaries, development plan zones,\n"
         "and environmental overlays.\n"
         "</goal>\n"
         "\n"
         "<workflow>\n"
-        "1. Check transit proximity via OpenStreetMap — nearest metro, railway, bus stops.\n"
-        "2. Query PMRDA GIS layers for jurisdiction — village, taluka boundaries.\n"
-        "3. Check development plan context — nearby building permissions, metro line\n"
+        "1. FIRST: Use geocode_address to convert the location/address to lat/lon.\n"
+        "   Do this before calling any other GIS tool.\n"
+        "2. Check transit proximity via OpenStreetMap — nearest metro, railway, bus stops.\n"
+        "3. Query PMRDA GIS layers for jurisdiction — village, taluka boundaries.\n"
+        "4. Check development plan context — nearby building permissions, metro line\n"
         "   proximity.\n"
-        "4. Assess environmental zones — wildlife sanctuaries, forest overlays.\n"
-        "5. Synthesize into a structured location assessment.\n"
+        "5. Assess environmental zones — wildlife sanctuaries, forest overlays.\n"
+        "6. Synthesize into a structured location assessment.\n"
         "</workflow>\n"
         "\n"
         "<persistence>\n"
@@ -143,61 +139,12 @@ gis_analyst = {
         "regulatory decisions.\n"
         "</output_format>"
     ),
-    "tools": [check_transit_proximity, query_pmrda_layer, check_development_plan],
-    "interrupt_on": {
-        check_transit_proximity.name: True,
-        query_pmrda_layer.name: True,
-        check_development_plan.name: True,
-    },
+    "tools": [
+        geocode_address,
+        check_transit_proximity,
+        query_pmrda_layer,
+        check_development_plan,
+    ],
 }
 
-title_verifier = {
-    "name": "title-verifier",
-    "model": _subagent_model,
-    "description": (
-        "Verify land title and ownership from Mahabhulekh land records. "
-        "Fetch 7/12 (Satbara) extracts and property cards to identify "
-        "current owners, land classification, encumbrances, and area discrepancies."
-    ),
-    "system_prompt": (
-        "<role>\n"
-        "You are a land title verification specialist for Maharashtra.\n"
-        "</role>\n"
-        "\n"
-        "<goal>\n"
-        "Given district, taluka, village, and survey/gat number, fetch and analyze\n"
-        "the 7/12 extract and property card from Mahabhulekh to produce a structured\n"
-        "title assessment.\n"
-        "</goal>\n"
-        "\n"
-        "<workflow>\n"
-        "1. Fetch the 7/12 (Satbara) extract using the provided location details.\n"
-        "2. Fetch the property card if available.\n"
-        "3. Analyze the records for ownership, classification, encumbrances, and\n"
-        "   discrepancies.\n"
-        "</workflow>\n"
-        "\n"
-        "<persistence>\n"
-        "- If the initial fetch fails due to missing dropdown values, try alternative\n"
-        "  spellings or nearby village names.\n"
-        "- Fetch both the 7/12 extract and property card in parallel when possible.\n"
-        "- Complete the full title analysis before returning.\n"
-        "</persistence>\n"
-        "\n"
-        "<output_format>\n"
-        "Structure the assessment as:\n"
-        "1. Current owners and their shares\n"
-        "2. Land classification (agricultural, NA, gairan, etc.)\n"
-        "3. Total area vs pot kharab (unusable land)\n"
-        "4. Rights, liabilities, and encumbrances\n"
-        "5. Discrepancies or red flags\n"
-        "\n"
-        "Note that Mahabhulekh data is for informational purposes per portal\n"
-        "disclaimer — not for legal use.\n"
-        "</output_format>"
-    ),
-    "tools": [fetch_7_12_extract, fetch_property_card],
-    "interrupt_on": {fetch_7_12_extract.name: True, fetch_property_card.name: True},
-}
-
-ALL_SUBAGENTS = [rera_analyst, regulatory_checker, gis_analyst, title_verifier]
+ALL_SUBAGENTS = [rera_analyst, regulatory_checker, gis_analyst]

@@ -15,3 +15,4 @@ wheels/
 # Data artifacts
 data/chroma_db/
 data/pdfs/*.pdf
+.langgraph_api/

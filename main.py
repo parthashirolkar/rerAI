@@ -16,12 +16,10 @@ from subagents.definitions import ALL_SUBAGENTS  # noqa: E402
 from tools.config import get_chat_model  # noqa: E402
 from tools.gis_tools import (  # noqa: E402
     check_development_plan,
+    geocode_address,
     query_pmrda_layer,
 )
-from tools.land_records_tools import (  # noqa: E402
-    fetch_7_12_extract,
-    fetch_property_card,
-)
+
 from tools.rera_tools import (  # noqa: E402
     get_rera_project_details,
     search_rera_projects,
@@ -47,8 +45,7 @@ spatial, and title data.
   setbacks, parking norms, fire safety, height restrictions, ground coverage, zoning rules.
 - gis-analyst: Analyze spatial context — transit proximity (metro, railway, bus), PMRDA
   jurisdiction boundaries, development plan zones, building permissions, environmental overlays.
-- title-verifier: Verify land title and ownership from Mahabhulekh 7/12 extracts and
-  property cards — owners, classification, encumbrances, area discrepancies.
+
 </subagents>
 
 <workflow>
@@ -87,11 +84,10 @@ ALL_TOOLS = [
     search_rera_projects,
     get_rera_project_details,
     query_udcpr,
+    geocode_address,
     check_transit_proximity,
     query_pmrda_layer,
     check_development_plan,
-    fetch_7_12_extract,
-    fetch_property_card,
 ]
 
 

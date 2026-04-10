@@ -14,6 +14,10 @@ uv run ruff check .        # Check all files for lint errors
 uv run ruff check --fix .  # Auto-fix lint errors
 uv run ruff format .       # Format all files
 
+# Running Tests
+uv run pytest                              # All tests (including live API tests)
+uv run pytest -m "not live"                # Unit tests only (no network)
+uv run pytest tests/test_integration.py -m live  # Integration chain tests only
 ```
 
 ## Code Style Guidelines
