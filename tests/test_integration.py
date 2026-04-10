@@ -161,7 +161,9 @@ class TestIntegrationReraChains:
         view_urls = [
             p.get("view_url") or p.get("url") or p.get("link") for p in projects if p
         ]
-        valid_url = next((u for u in view_urls if u and "projectView" in str(u)), None)
+        valid_url = next(
+            (u for u in view_urls if u and "public/project/view/" in str(u)), None
+        )
         if not valid_url:
             pytest.skip("No valid view_url found in project results")
 
