@@ -7,9 +7,10 @@ from langchain_core.documents import Document
 from langchain_core.tools import tool
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from tools.config import get_embeddings
+from tools.config import CHROMA_DATABASE, CHROMA_TENANT, get_embeddings
 
-CHROMA_PERSIST_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "chroma_db")
+CHROMA_API_KEY = os.environ.get("CHROMA_API_KEY")
+
 PDF_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "pdfs")
 
 _vector_store: Chroma | None = None
@@ -28,20 +29,30 @@ def _get_vector_store() -> Chroma:
         return _vector_store
 
     embeddings = get_embeddings()
-    persist_dir = os.path.abspath(CHROMA_PERSIST_DIR)
 
-    if os.path.exists(persist_dir) and os.listdir(persist_dir):
-        _vector_store = Chroma(
-            persist_directory=persist_dir,
-            embedding_function=embeddings,
-            collection_name="udcpr",
-        )
-        return _vector_store
+    # Connect to ChromaDB Cloud
+    _vector_store = Chroma(
+        collection_name="udcpr",
+        embedding_function=embeddings,
+        tenant=CHROMA_TENANT,
+        database=CHROMA_DATABASE,
+        chroma_cloud_api_key=CHROMA_API_KEY,
+    )
 
-    return _ingest_pdfs(persist_dir, embeddings)
+    # Check if collection is empty and ingest if needed
+    try:
+        count = _vector_store._collection.count()
+        if count == 0:
+            print("ChromaDB Cloud collection is empty. Ingesting from PDFs...")
+            return _ingest_pdfs(embeddings)
+    except Exception:
+        # Collection might not exist yet
+        pass
+
+    return _vector_store
 
 
-def _ingest_pdfs(persist_dir: str, embeddings) -> Chroma:
+def _ingest_pdfs(embeddings) -> Chroma:
     from pypdf import PdfReader
 
     pdf_dir = os.path.abspath(PDF_DIR)
@@ -80,24 +91,13 @@ def _ingest_pdfs(persist_dir: str, embeddings) -> Chroma:
 
     valid_chunks = [c for c in chunks if c.page_content.strip()]
 
+    # Add to existing ChromaDB Cloud collection
     batch_size = 50
-    collection = None
     for i in range(0, len(valid_chunks), batch_size):
         batch = valid_chunks[i : i + batch_size]
-        if collection is None:
-            vector_store = Chroma.from_documents(
-                documents=batch,
-                embedding=embeddings,
-                persist_directory=persist_dir,
-                collection_name="udcpr",
-            )
-            collection = vector_store
-        else:
-            collection.add_documents(documents=batch)
+        _vector_store.add_documents(documents=batch)
 
-    global _vector_store
-    _vector_store = collection
-    return collection
+    return _vector_store
 
 
 def init_udcpr_store() -> int:

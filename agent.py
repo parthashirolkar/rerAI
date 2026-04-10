@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from deepagents import create_deep_agent  # noqa: E402
+from deepagents.backends import FilesystemBackend  # noqa: E402
 
 # Re-export for consumers
 from subagents.definitions import ALL_SUBAGENTS  # noqa: E402
@@ -105,5 +106,6 @@ graph = create_deep_agent(
     memory=["./memory/AGENT_KNOWLEDGE.md"],
     skills=["./skills/"],
     system_prompt=SYSTEM_PROMPT,
+    backend=FilesystemBackend(root_dir="./"),
     # interrupt_on={t.name: True for t in ALL_TOOLS},
 )
