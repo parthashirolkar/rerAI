@@ -130,7 +130,7 @@ async def query_udcpr(question: str, n_results: int = 3) -> str:
     for doc, score in results:
         source = doc.metadata.get("source", "unknown")
         page = doc.metadata.get("page", "?")
-        content = doc.page_content[:500]
+        content = doc.page_content
         output_parts.append(
             f"[{source}, page {page}] (relevance: {1 - score:.3f})\n{content}"
         )

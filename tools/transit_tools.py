@@ -18,8 +18,12 @@ from langchain_core.tools import tool
 
 from tools.geo import haversine_km
 
-OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_API_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
 DEFAULT_TIMEOUT_SECS = 25
+MAX_RETRIES = 3
 
 
 def _build_overpass_query(lat: float, lon: float, radius_m: int) -> str:
@@ -62,15 +66,22 @@ def _classify_element(tags: dict[str, str]) -> str:
 
 
 def _query_overpass(query: str) -> dict[str, Any]:
-    """Execute an Overpass API query and return the parsed JSON response."""
+    """Execute an Overpass API query against mirror list, returning the first success."""
     data = urllib.parse.urlencode({"data": query}).encode("utf-8")
-    req = urllib.request.Request(
-        OVERPASS_API_URL,
-        data=data,
-        headers={"User-Agent": "rerAI/0.1 (Pune permitting assistant)"},
-    )
-    with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT_SECS + 10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    last_err = ""
+    for url in OVERPASS_API_URLS:
+        try:
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"User-Agent": "rerAI/0.1 (Pune permitting assistant)"},
+            )
+            with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT_SECS + 10) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            last_err = str(e)
+            continue
+    raise urllib.error.URLError(last_err)
 
 
 async def _query_overpass_async(query: str) -> dict[str, Any]:
@@ -102,14 +113,29 @@ async def check_transit_proximity(
 
     query = _build_overpass_query(lat, lon, radius_m)
 
-    try:
-        result = await _query_overpass_async(query)
-    except urllib.error.URLError as e:
-        return json.dumps({"error": f"Overpass API request failed: {e}"})
-    except json.JSONDecodeError as e:
-        return json.dumps({"error": f"Failed to parse Overpass response: {e}"})
+    result = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            result = await _query_overpass_async(query)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 504) and attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(2**attempt)
+                continue
+            return json.dumps({"error": f"Overpass API HTTP error: {e}"})
+        except urllib.error.URLError as e:
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(2**attempt)
+                continue
+            return json.dumps({"error": f"Overpass API request failed: {e}"})
 
-    elements = result.get("elements", [])
+    if result is None:
+        return json.dumps({"error": "Overpass API returned no result after retries"})
+
+    try:
+        elements = result.get("elements", [])
+    except Exception:
+        return json.dumps({"error": "Failed to parse Overpass response"})
 
     categorized: dict[str, list[dict]] = {
         "metro_stations": [],

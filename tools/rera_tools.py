@@ -1,22 +1,199 @@
+"""tools/rera_tools.py -- MahaRERA project search and details for rerAI.
+
+Provides tools to search MahaRERA registered projects by district and fetch
+detailed project information including promoter details, building info,
+ FSI data, inventory, documents, and complaints.
+
+The MahaRERA portal consists of two separate systems:
+- Drupal site (maharera.maharashtra.gov.in): project search, server-rendered HTML
+- SPA (maharerait.maharashtra.gov.in): project detail view, REST/JSON API
+
+Search works via Drupal HTML scraping. Detail fetching uses the SPA API with
+a shared public-service account credentials (AES-encrypted before POST).
+"""
+
 import asyncio
+import base64
+import hashlib
 import json
 import re
+import time
 from typing import Optional
 
 from bs4 import BeautifulSoup
 from langchain_community.document_loaders import AsyncHtmlLoader
 from langchain_core.tools import tool
 
+from tools.config import (
+    MAHARERA_CRYPTOJS_KEY,
+    MAHARERA_PUBLIC_PASSWORD,
+    MAHARERA_PUBLIC_USERNAME,
+)
+
 BASE_URL = "https://maharera.maharashtra.gov.in"
 DIVISION_API = f"{BASE_URL}/get-division-data"
 DISTRICT_API = f"{BASE_URL}/div-district-data"
 SEARCH_URL = f"{BASE_URL}/projects-search-result"
-PROJECT_VIEW_URL = f"{BASE_URL}/public/project/view"
 STATE_CODE = "27"
 LANG_ID = "1"
 
+MAHARERA_API_BASE = (
+    "https://maharerait.maharashtra.gov.in"
+    "/api/maha-rera-public-view-project-registration-service"
+    "/public/projectregistartion"
+)
+MAHARERA_LOGIN_API = (
+    "https://maharerait.maharashtra.gov.in/api/maha-rera-login-service/login"
+)
+
+CRYPTOJS_KEY = MAHARERA_CRYPTOJS_KEY
+_PUBLIC_USERNAME = MAHARERA_PUBLIC_USERNAME
+_PUBLIC_PASSWORD = MAHARERA_PUBLIC_PASSWORD
+
+_cached_token: Optional[str] = None
+_token_issued_at: float = 0.0
+
+
+def evp_bytes_to_key(
+    password: bytes, salt: bytes, key_len: int = 32, iv_len: int = 16
+) -> tuple[bytes, bytes]:
+    """Derive AES-256 key and IV from a password and salt using OpenSSL's EVP_BytesToKey.
+
+    This implements the key-derivation function that CryptoJS uses when encrypting
+    with a passphrase (ciphername: "AES", mode: "CBC", padding: "Pkcs7").
+    EVP_BytesToKey is MD5-based and intentionally slow for brute-force resistance.
+    The derived key and IV are used to AES-encrypt credentials before sending
+    them to the MahaRERA login endpoint.
+
+    Args:
+        password: The secret passphrase (bytes).
+        salt: Random salt, exactly 8 bytes (bytes).
+        key_len: Desired key length in bytes (default 32 = AES-256).
+        iv_len: Desired IV length in bytes (default 16 = AES block size).
+
+    Returns:
+        A tuple (key_bytes, iv_bytes) of the derived key and IV.
+    """
+    dtot = b""
+    d = b""
+    while len(dtot) < key_len + iv_len:
+        d = hashlib.md5(d + password + salt).digest()
+        dtot += d
+    return dtot[:key_len], dtot[key_len : key_len + iv_len]
+
+
+def cryptojs_encrypt(plaintext: str, passphrase: str) -> str:
+    """Encrypt a string using CryptoJS AES-compatible encryption.
+
+    Produces a Base64-encoded string in the format used by CryptoJS
+    with OpenSSL-compatible salted key derivation (prefix ``Salted__``).
+
+    The encryption scheme is:
+      1. Generate 8 random salt bytes.
+      2. Derive key + IV via EVP_BytesToKey (MD5, 1 iteration).
+      3. Pad plaintext with PKCS7.
+      4. AES-256-CBC encrypt.
+      5. Prepend ``Salted__`` + 8-byte salt to ciphertext.
+      6. Base64-encode the result.
+
+    Args:
+        plaintext: The UTF-8 string to encrypt.
+        passphrase: The secret passphrase used for key derivation.
+
+    Returns:
+        A Base64-encoded ``Salted__<salt><ciphertext>`` string.
+    """
+    import os
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    salt = os.urandom(8)
+    key, iv = evp_bytes_to_key(passphrase.encode("utf-8"), salt)
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+    encryptor = cipher.encryptor()
+    pad_len = 16 - (len(plaintext.encode("utf-8")) % 16)
+    padded = plaintext.encode("utf-8") + bytes([pad_len] * pad_len)
+    encrypted = encryptor.update(padded) + encryptor.finalize()
+    return base64.b64encode(b"Salted__" + salt + encrypted).decode()
+
+
+def _post_json(url: str, payload: dict, headers: Optional[dict] = None) -> dict:
+    """POST a JSON payload to a URL and parse the JSON response.
+
+    Args:
+        url: Full URL to POST to.
+        payload: Dictionary that will be JSON-serialized and sent as the body.
+        headers: Additional HTTP headers (optional). Content-Type is always
+            set to ``application/json``.
+
+    Returns:
+        The parsed JSON response as a dictionary.
+
+    Raises:
+        urllib.error.URLError: On network or HTTP errors.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    data = json.dumps(payload).encode("utf-8")
+    headers = headers or {}
+    headers["Content-Type"] = "application/json"
+    headers["User-Agent"] = "rerAI/0.1"
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _get_bearer_token() -> str:
+    """Obtain a JWT bearer token from the MahaRERA login API.
+
+    The SPA uses a shared public-service account to authenticate all
+    anonymous API requests. The credentials are AES-encrypted with a
+    hardcoded key before being sent. On success the API returns a
+    RS256-signed JWT that must be included as ``Authorization: Bearer <token>``
+    on subsequent requests.
+
+    The token is cached in module globals with a 90-minute expiry
+    (the API issues tokens valid for 100 minutes).
+
+    Returns:
+        A valid JWT bearer token string.
+
+    Raises:
+        RuntimeError: If the login API returns an unexpected response.
+    """
+    global _cached_token, _token_issued_at
+
+    if _cached_token is not None:
+        elapsed = time.time() - _token_issued_at
+        if elapsed < 5400:
+            return _cached_token
+
+    encrypted_user = cryptojs_encrypt(_PUBLIC_USERNAME, CRYPTOJS_KEY)
+    encrypted_pass = cryptojs_encrypt(_PUBLIC_PASSWORD, CRYPTOJS_KEY)
+
+    resp = _post_json(
+        f"{MAHARERA_LOGIN_API}/authenticatePublic",
+        {"userName": encrypted_user, "password": encrypted_pass},
+    )
+
+    if resp.get("status") == "1" and "responseObject" in resp:
+        _cached_token = resp["responseObject"]["accessToken"]
+        _token_issued_at = time.time()
+        return _cached_token
+
+    raise RuntimeError(f"MahaRERA auth failed: {resp}")
+
 
 async def _fetch_html(url: str) -> str:
+    """Fetch and return the HTML content of a URL using an async loader.
+
+    Args:
+        url: The URL to fetch.
+
+    Returns:
+        The page content as a string, or an empty string on failure.
+    """
     loader = AsyncHtmlLoader([url])
     docs = await asyncio.to_thread(loader.load)
     if docs and len(docs) > 0:
@@ -25,6 +202,14 @@ async def _fetch_html(url: str) -> str:
 
 
 async def _get_divisions() -> dict[str, str]:
+    """Fetch the division-to-code mapping from the Drupal search portal.
+
+    Divisions are the top-level administrative tier in the MahaRERA
+    search filter (e.g., "Pune", "Konkan", "Nashik").
+
+    Returns:
+        Dictionary mapping division name (e.g. "Pune") to its numeric code.
+    """
     url = (
         f"{DIVISION_API}?"
         f"stateCode={STATE_CODE}&"
@@ -38,6 +223,17 @@ async def _get_divisions() -> dict[str, str]:
 
 
 async def _get_districts_for_division(division_code: str) -> dict[str, str]:
+    """Fetch the district-to-code mapping for a given division.
+
+    The Drupal portal returns districts as AJAX dropdown options filtered
+    by the selected division.
+
+    Args:
+        division_code: The numeric division code (e.g. "2" for Pune).
+
+    Returns:
+        Dictionary mapping district name (e.g. "Pune") to its numeric code.
+    """
     url = (
         f"{DISTRICT_API}?"
         f"state_code={STATE_CODE}&"
@@ -52,6 +248,20 @@ async def _get_districts_for_division(division_code: str) -> dict[str, str]:
 
 
 async def _resolve_district_code(district_name: str) -> str:
+    """Resolve a human-readable district name to its numeric code.
+
+    Searches all divisions to find the district code, using exact match
+    first, then fuzzy match (substring) as a fallback.
+
+    Args:
+        district_name: District name as it appears in the portal (e.g. "Pune").
+
+    Returns:
+        The numeric district code string.
+
+    Raises:
+        ValueError: If the district is not found in any division.
+    """
     divisions = await _get_divisions()
     all_districts: dict[str, str] = {}
     for _, division_code in divisions.items():
@@ -75,6 +285,18 @@ async def _resolve_district_code(district_name: str) -> str:
 
 
 def _extract_project_from_card(card_soup) -> Optional[dict]:
+    """Parse a single project card element from the Drupal HTML search results.
+
+    Each card contains: RERA ID, project name, promoter name, district,
+    and a "View Details" link containing the project view URL.
+
+    Args:
+        card_soup: A BeautifulSoup element representing one project card div.
+
+    Returns:
+        A dictionary with keys ``rera_id``, ``project_name``, ``promoter``,
+        ``district``, and ``view_url``, or ``None`` if parsing fails.
+    """
     try:
         rera_elem = card_soup.find("p", class_="p-0")
         rera_id = None
@@ -124,6 +346,14 @@ def _extract_project_from_card(card_soup) -> Optional[dict]:
 
 
 async def _parse_project_cards(html: str) -> list[dict]:
+    """Extract all project cards from a Drupal search results HTML page.
+
+    Args:
+        html: The full HTML string of a search results page.
+
+    Returns:
+        A list of parsed project dictionaries from that page.
+    """
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.find_all("div", class_="row shadow p-3 mb-5 bg-body rounded")
     projects = []
@@ -135,6 +365,17 @@ async def _parse_project_cards(html: str) -> list[dict]:
 
 
 def _get_total_pages(html: str) -> int:
+    """Extract the total page count from a Drupal search results page.
+
+    The Drupal search results include a ``pagesCount`` span element containing
+    the total number of result pages.
+
+    Args:
+        html: The HTML of a search results page.
+
+    Returns:
+        The total number of pages, or 1 if the element is not found.
+    """
     match = re.search(r'<span class="pagesCount"[^>]*data-current-data="(\d+)"', html)
     if match:
         return int(match.group(1))
@@ -142,6 +383,19 @@ def _get_total_pages(html: str) -> int:
 
 
 async def _fetch_projects(district_name: str, max_pages: int = 1) -> list[dict]:
+    """Fetch all (or up to max_pages) project cards for a district.
+
+    The Drupal search endpoint returns one page at a time with ~10 projects.
+    This function fetches the first page, reads the total page count,
+    then fetches any additional pages up to ``max_pages``.
+
+    Args:
+        district_name: District name as accepted by ``_resolve_district_code``.
+        max_pages: Maximum number of result pages to fetch (default 1).
+
+    Returns:
+        A deduplicated list of project dictionaries.
+    """
     district_code = await _resolve_district_code(district_name)
 
     search_url = (
@@ -214,65 +468,132 @@ async def search_rera_projects(district_name: str, max_pages: int = 1) -> str:
     )
 
 
-@tool
-async def get_rera_project_details(view_url: str) -> str:
-    """Fetch detailed information from a MahaRERA project detail page.
+def _extract_project_id(view_url: str) -> int:
+    """Extract the numeric projectId from a MahaRERA project view URL.
 
-    Given a view_url from search_rera_projects, scrapes the full project
-    detail page for compliance data, promoter info, and project status.
-    Note: The project detail portal is a single-page app (SPA). This tool
-    uses Playwright to render the page and extract content.
+    The view URL path format is ``/public/project/view/<projectId>``.
+    Note that this is the internal database ID, NOT the RERA registration
+    number (e.g. ``P52100001864``).
 
     Args:
-        view_url: The project detail URL (e.g. https://maharerait.maharashtra.gov.in/public/project/view/53)
+        view_url: Full URL or path like
+            ``https://maharerait.maharashtra.gov.in/public/project/view/53``.
+
+    Returns:
+        The integer projectId.
+
+    Raises:
+        ValueError: If the URL does not match the expected pattern.
     """
-    full_url = view_url if view_url.startswith("http") else f"{BASE_URL}{view_url}"
+    match = re.search(r"/public/project/view/(\d+)", view_url)
+    if not match:
+        raise ValueError(f"Could not extract projectId from view_url: {view_url}")
+    return int(match.group(1))
 
-    from playwright.async_api import async_playwright
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+async def _call_api(operation: str, payload: dict, token: Optional[str] = None) -> dict:
+    """Call a MahaRERA SPA API endpoint.
 
-        all_responses = []
+    Args:
+        operation: The API operation name (e.g. ``getProjectGeneralDetailsByProjectId``).
+            Appended to ``MAHARERA_API_BASE`` to form the full URL.
+        payload: JSON-serializable request body dict.
+        token: Optional JWT bearer token. If provided, the
+            ``Authorization: Bearer <token>`` header is included.
 
-        async def capture(resp):
-            if "/api/" in resp.url and "getProjectById" in resp.url:
-                try:
-                    body = await resp.text()
-                    all_responses.append((resp.url, resp.status, body))
-                except Exception:
-                    pass
+    Returns:
+        The parsed JSON response dictionary from the API.
+    """
+    url = f"{MAHARERA_API_BASE}/{operation}"
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return await asyncio.to_thread(_post_json, url, payload, headers)
 
-        page.on("response", capture)
 
-        await page.goto(full_url, wait_until="networkidle", timeout=30000)
-        await page.wait_for_timeout(5000)
+@tool
+async def get_rera_project_details(view_url: str) -> str:
+    """Fetch detailed information for a MahaRERA project.
 
-        await browser.close()
+    Given a view_url from search_rera_projects, fetches full project details
+    via the MahaRERA public API including registration info, promoter details,
+    building list, FSI data, inventory, uploaded documents, and complaints.
 
-    if all_responses:
-        _, status, body = all_responses[0]
-        if status == 200:
-            return body[:2500]
-        return f"API returned status {status}: {body[:500]}"
+    The function calls both public endpoints (no authentication required) and
+    authenticated endpoints (requires bearer token obtained via the public-service
+    account). Authenticated calls are best-effort — if token acquisition fails,
+    only public data is returned.
 
-    html_text = None
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(full_url, wait_until="networkidle", timeout=30000)
-        await page.wait_for_timeout(5000)
+    Args:
+        view_url: The project detail URL
+            (e.g. https://maharerait.maharashtra.gov.in/public/project/view/53)
 
-        html_text = await page.inner_text("body")
-        await browser.close()
+    Returns:
+        A JSON string with keys:
 
-    if html_text and len(html_text.strip()) > 100:
-        return html_text[:2500]
+        - ``projectId``: The internal project ID.
+        - ``view_url``: The URL that was queried.
+        - ``public_info``: Response from getProjectGeneralDetailsByProjectId
+          (RERA reg number, type, status, dates, fees).
+        - ``status``: Response from getProjectCurrentStatus
+          (statusId, statusName, isDeregistered, isAbeyance).
+        - ``complaints``: Response from getComplaintDetailsByProjectId
+          (complaints array, warrant details).
+        - ``authenticated_info``: Present only when a bearer token was obtained.
+          Contains ``promoter``, ``buildings``, ``general_plan``,
+          ``inventory``, and ``documents`` from the respective authenticated
+          endpoints.
+    """
+    project_id = _extract_project_id(view_url)
 
-    return (
-        "Could not extract project details. The MahaRERA detail portal is a "
-        "single-page app that requires JavaScript rendering which may not work "
-        "in headless mode. Use search_rera_projects to get summary data, or "
-        f"visit the URL directly: {full_url}"
+    public_payload = {"projectId": project_id}
+    token = None
+    try:
+        token = _get_bearer_token()
+    except Exception:
+        pass
+
+    async def call(op: str, p: Optional[dict] = None) -> dict:
+        return await _call_api(op, p or public_payload, token)
+
+    (
+        general,
+        status,
+        complaints,
+        promoter,
+        buildings,
+        plan,
+        inventory,
+        docs,
+    ) = await asyncio.gather(
+        call("getProjectGeneralDetailsByProjectId"),
+        call("getProjectCurrentStatus"),
+        call("getComplaintDetailsByProjectId"),
+        call("getProjectAndAssociatedPromoterDetails") if token else asyncio.sleep(0),
+        call("getProjectBuildingDetails") if token else asyncio.sleep(0),
+        call("getProjectGeneralPlanSummary") if token else asyncio.sleep(0),
+        call("getProjectSoldUnsoldInventory") if token else asyncio.sleep(0),
+        call("getUploadedDocuments") if token else asyncio.sleep(0),
     )
+
+    result = {
+        "projectId": project_id,
+        "view_url": view_url,
+        "public_info": general if isinstance(general, dict) else None,
+        "status": status if isinstance(status, dict) else None,
+        "complaints": complaints if isinstance(complaints, dict) else None,
+    }
+
+    if token:
+        auth_data = {
+            "promoter": promoter if isinstance(promoter, dict) else None,
+            "buildings": buildings if isinstance(buildings, dict) else None,
+            "general_plan": plan if isinstance(plan, dict) else None,
+            "inventory": inventory if isinstance(inventory, dict) else None,
+            "documents": docs if isinstance(docs, dict) else None,
+        }
+        result["authenticated_info"] = {
+            k: v for k, v in auth_data.items() if v is not None
+        }
+
+    return json.dumps(result, ensure_ascii=False, indent=2)

@@ -17,6 +17,9 @@ from langchain_core.tools import tool
 
 from tools.geo import haversine_km
 
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_TIMEOUT = 15
+
 
 def _centroid(geom: dict) -> tuple[float, float]:
     coords = geom.get("coordinates", [])
@@ -40,9 +43,73 @@ def _centroid(geom: dict) -> tuple[float, float]:
     return sum(lons) / len(lons), sum(lats) / len(lats)
 
 
+def _geocode_sync(address: str) -> dict[str, Any]:
+    """Geocode a text address to lat/lon using Nominatim (OpenStreetMap)."""
+    params = urllib.parse.urlencode(
+        {
+            "q": address,
+            "format": "json",
+            "limit": "1",
+            "addressdetails": "1",
+        }
+    )
+    url = f"{NOMINATIM_URL}?{params}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "rerAI/0.1 (Pune permitting assistant)",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=NOMINATIM_TIMEOUT) as resp:
+        results = json.loads(resp.read().decode("utf-8"))
+
+    if not results:
+        return {"found": False, "address": address}
+
+    first = results[0]
+    return {
+        "found": True,
+        "lat": float(first["lat"]),
+        "lon": float(first["lon"]),
+        "display_name": first.get("display_name", ""),
+        "address": first.get("address", {}),
+    }
+
+
+async def _geocode_async(address: str) -> dict[str, Any]:
+    """Async wrapper around _geocode_sync."""
+    return await asyncio.to_thread(_geocode_sync, address)
+
+
+@tool
+async def geocode_address(address: str) -> str:
+    """Convert a text address or location description to latitude/longitude coordinates.
+
+    Use this tool FIRST when given a location in text form (e.g., "plot in Kothrud",
+    "near Symbiosis College Viman Nagar") before calling any other GIS tool that
+    requires coordinates. All GIS tools (check_transit_proximity, query_pmrda_layer,
+    check_development_plan) require lat/lon coordinates.
+
+    Args:
+        address: Text address or location description (e.g., "Wakad Bridge, Pune",
+                 "FC Road, Deccan, Pune", "Kothrud, Pune")
+
+    Returns:
+        JSON string with lat/lon coordinates and the normalized address.
+        Returns {"found": false} if the address cannot be geocoded.
+
+    Example:
+        geocode_address("Wakad, Pune") -> '{"found": true, "lat": 18.59,
+        "lon": 73.76, "display_name": "..."}'
+    """
+    result = await _geocode_async(address)
+    return json.dumps(result, ensure_ascii=False)
+
+
 PMRDA_GIS_API_URL = "https://gis.pmrda.gov.in/api"
 PMRDA_WMS_URL = "https://gismap.pmrda.gov.in:8443/cgi-bin/IGiS_Ent_service.exe"
-DEFAULT_TIMEOUT_SECS = 30
+PMRDA_TIMEOUT = 30
 
 KEY_LAYERS = {
     "boundary_village": "Village boundaries",
@@ -70,7 +137,7 @@ def _make_request(
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT_SECS) as resp:
+    with urllib.request.urlopen(req, timeout=PMRDA_TIMEOUT) as resp:
         raw = resp.read().decode("utf-8")
         if not raw.strip():
             return {"type": "FeatureCollection", "features": []}
