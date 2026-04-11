@@ -17,7 +17,7 @@ MAHARERA_PUBLIC_USERNAME = os.environ.get(
 MAHARERA_PUBLIC_PASSWORD = os.environ.get("MAHARERA_PUBLIC_PASSWORD", "Maharera!@$1")
 MAHARERA_CRYPTOJS_KEY = os.environ.get("MAHARERA_CRYPTOJS_KEY", "sdjhfsdkjgkls74385385")
 
-CHAT_MODEL = "stepfun/step-3.5-flash:free"
+CHAT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 SUBAGENT_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
 EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -51,6 +51,7 @@ def get_chat_model(**kwargs):
         model=CHAT_MODEL,
         base_url=OPENROUTER_BASE_URL,
         api_key=OPENROUTER_API_KEY,
+        streaming=True,
         **kwargs,
     )
 
@@ -60,6 +61,7 @@ def get_subagent_model(**kwargs):
         model=SUBAGENT_MODEL,
         base_url=OPENROUTER_BASE_URL,
         api_key=OPENROUTER_API_KEY,
+        streaming=True,
         **kwargs,
     )
 

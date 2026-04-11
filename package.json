@@ -1,25 +1,25 @@
 {
-  "name": "rerai-monorepo",
-  "private": true,
-  "packageManager": "bun@1.2.22",
-  "workspaces": [
-    "apps/*"
-  ],
-  "scripts": {
-    "backend:dev": "cd apps/backend && uv run langgraph dev --port 8123",
-    "backend:build": "cd apps/backend && uv run langgraph build -t rerai-langgraph-api",
-    "backend:test": "cd apps/backend && OPENROUTER_API_KEY=dummy uv run pytest -m \"not live\"",
-    "backend:lint": "cd apps/backend && OPENROUTER_API_KEY=dummy uv run ruff check .",
-    "web:dev": "cd apps/web && bun run dev",
-    "web:build": "cd apps/web && bun run build",
-    "convex:dev": "cd apps/convex && bun run dev",
-    "convex:deploy": "cd apps/convex && bun run deploy",
-    "lint": "bun run backend:lint",
-    "dev": "concurrently -k -n backend,web,convex -c blue,green,magenta \"bun run backend:dev\" \"bun run web:dev\" \"bun run convex:dev\"",
-    "test": "bun run backend:test && bun run web:build",
-    "build": "bun run backend:build && bun run web:build"
-  },
-  "devDependencies": {
-    "concurrently": "^9.2.1"
-  }
+    "name": "rerAI",
+    "private": true,
+    "packageManager": "bun@1.2.22",
+    "workspaces": [
+        "apps/*"
+    ],
+    "scripts": {
+        "backend:dev": "cd apps/backend && uv run langgraph dev --port 8123",
+        "backend:build": "cd apps/backend && uv run langgraph build -t rerai-langgraph-api",
+        "backend:test": "cd apps/backend && OPENROUTER_API_KEY=dummy uv run pytest -m \"not live\"",
+        "backend:lint": "cd apps/backend && OPENROUTER_API_KEY=dummy uv run ruff check .",
+        "web:dev": "cd apps/web && bun run dev",
+        "web:build": "cd apps/web && bun run build",
+        "convex:dev": "cd apps/convex && bun run dev",
+        "convex:deploy": "cd apps/convex && bun run deploy",
+        "lint": "bun run backend:lint",
+        "dev": "concurrently -k -n backend,web,convex -c blue,green,magenta \"bun run backend:dev\" \"bun run web:dev\" \"bun run convex:dev\"",
+        "test": "bun run backend:test && bun run web:build",
+        "build": "bun run backend:build && bun run web:build"
+    },
+    "devDependencies": {
+        "concurrently": "^9.2.1"
+    }
 }
