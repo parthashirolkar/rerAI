@@ -1,124 +1,82 @@
-# rerAI — Autonomous Permitting Assistant
+# rerAI monorepo
 
-An AI-powered permitting agent for Pune, Maharashtra that checks RERA compliance, queries building regulations via RAG, and produces structured permit feasibility reports.
+rerAI is an autonomous permitting assistant for Pune, Maharashtra.
 
-> Think "Claude Code for land" — but for Indian municipal permitting.
+## Layout
 
-## What it does
+- `apps/backend`: Python/LangGraph backend (managed by `uv`, not Bun workspaces)
+- `apps/web`: React + TypeScript + Vite + Tailwind frontend
+- `apps/convex`: Convex app for UI/session state
 
-Given a plot query (address, survey number, or coordinates), rerAI:
+## Monorepo rules
 
-1. **Plans** the assessment via an internal task list
-2. **Delegates** to specialized subagents for parallel data gathering
-3. **Synthesizes** findings into a structured permit feasibility report
+- Deployable apps live in `apps/`.
+- Bun workspaces are declared as `apps/*`.
+- The Python backend is intentionally not a JS workspace package; it is managed via `apps/backend/pyproject.toml` and `uv.lock`.
+- Use the repo-root `.env`; app-local `.env` files are not required.
 
-### Current data pillars
+## Local development
 
-| Pillar | Status | Subagent | Data Source |
-|---|---|---|---|
-| RERA Compliance | Phase 1 | `rera-analyst` | MahaRERA portal scraping |
-| Building Regulations | Phase 1 | `regulatory-checker` | UDCPR 2025 PDF (576 pages, ChromaDB RAG) |
-| GIS Spatial | Phase 2 | `gis-analyst` | Bhuvan WMS, PMC Open Data, OpenStreetMap |
-| Land Records | Phase 2 | `title-verifier` | Mahabhulekh 7/12 extracts via Playwright |
-| Environmental | Phase 3 | `environmental-checker` | PARIVESH, eco-sensitive zone boundaries |
-
-## Architecture
-
-```
-User Query
-    │
-    ▼
-┌─────────────────────────────────┐
-│   Orchestrator (deepagents)     │
-│   qwen/qwen3.6-plus:free        │
-│   via OpenRouter                 │
-├─────────────────────────────────┤
-│  ┌──────────┐  ┌──────────────┐ │
-│  │ rera-    │  │ regulatory-  │ │
-│  │ analyst  │  │ checker      │ │
-│  │ (nemotron│  │ (nemotron)   │ │
-│  └──────────┘  └──────────────┘ │
-└─────────────────────────────────┘
-    │
-    ▼
-Permit Feasibility Report
-```
-
-Built on [deepagents](https://github.com/langchain-ai/deepagents) — LangChain's agent orchestration framework over LangGraph. Each subagent runs with context isolation: heavy scraping/vector search stays in the subagent, only synthesized results return to the orchestrator.
-
-## Setup
-
-### Prerequisites
-
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) package manager
-- [Ollama](https://ollama.ai) running locally with `embeddinggemma:latest` pulled
-- OpenRouter API key
-
-### Install
+1. Install workspace dependencies:
 
 ```bash
-git clone https://github.com/parthashirolkar/rerAI.git
-cd rerAI
-uv sync
+bun install
 ```
 
-### Configure
-
-Create a `.env` file (already gitignored):
-
-```
-OPENROUTER_API_KEY=sk-or-v1-...
-OLLAMA_BASE_URL=http://localhost:11434/v1
-```
-
-### Pull embedding model
+2. Install backend Python deps:
 
 ```bash
-ollama pull embeddinggemma:latest
+cd apps/backend && uv sync
 ```
 
-## Usage
+3. Start everything:
 
 ```bash
-uv run python main.py
+bun run dev
 ```
 
-This will:
-1. Ingest the UDCPR PDF into ChromaDB (first run only, ~1625 chunks)
-2. Start an interactive REPL
+This runs:
+- backend: `uv run langgraph dev` in `apps/backend`
+- web: Vite in `apps/web`
+- convex: `convex dev` in `apps/convex`
 
-Example queries:
-- "What are the FSI limits for a residential plot in Pune?"
-- "Search for RERA projects in Pune district"
-- "Check permit feasibility for survey number 123 in Haveli taluka"
+Convex may prompt you to create/link a project the first time you run it.
 
-## Project Structure
+If you want to run them separately:
 
-```
-rerAI/
-├── main.py                    # Orchestrator REPL
-├── tools/
-│   ├── config.py              # LLM + embedding config
-│   ├── rera_tools.py          # MahaRERA search/lookup tools
-│   └── regulatory_tools.py    # UDCPR RAG query tool
-├── subagents/
-│   └── definitions.py         # Subagent configurations
-├── memory/
-│   └── AGENT_KNOWLEDGE.md     # Pune context (loaded at runtime)
-├── skills/
-│   └── permit-feasibility/    # Permit assessment skill
-├── data/
-│   ├── pdfs/                  # UDCPR PDFs (gitignored)
-│   └── chroma_db/             # Vector store (gitignored)
-├── ROADMAP.md                 # Phase 2-3 implementation spec
-└── pyproject.toml
+```bash
+bun run backend:dev
+bun run web:dev
+bun run convex:dev
 ```
 
-## Roadmap
+## Backend env
 
-See [ROADMAP.md](./ROADMAP.md) for detailed Phase 2 (GIS + Land Records) and Phase 3 (Environmental + Synthesis) specifications.
+Copy `apps/backend/.env.example` to `.env` at the repo root and set:
 
-## License
+- `DATABASE_URI`
+- `REDIS_URI`
+- `OPENROUTER_API_KEY`
+- `CHROMA_API_KEY`
+- `CHROMA_TENANT`
+- `CHROMA_DATABASE`
 
-MIT
+Frontend-only env vars (for Vite) can stay in `apps/web/.env.local`.
+
+## Testing
+
+```bash
+bun run backend:test
+bun run backend:lint
+bun run web:build
+```
+
+## Deployment
+
+- `apps/backend`: `bun run backend:build`, then deploy the Docker image to Railway or any Docker host
+- `apps/web`: deploy to Vercel or Cloudflare Pages
+- `apps/convex`: `bun run convex:deploy`
+
+## Notes
+
+- The backend is self-hosted LangGraph, not LangSmith.

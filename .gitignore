@@ -16,3 +16,29 @@ wheels/
 data/chroma_db/
 data/pdfs/*.pdf
 .langgraph_api/
+apps/backend/.langgraph_api/
+
+# JS/TS workspace artifacts
+node_modules/
+*.tsbuildinfo
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
+
+# Monorepo local env files
+apps/*/.env
+apps/*/.env.local
+apps/*/.venv/
+apps/*/.convex/
+apps/convex/.agents/
+apps/convex/.claude/
+apps/convex/skills-lock.json
+apps/convex/convex/_generated/ai/ai-files.state.json
+
+# Python caches inside apps
+apps/backend/.pytest_cache/
+apps/backend/__pycache__/
+apps/backend/src/**/__pycache__/
+
+# Tool caches
+.ruff_cache/
+apps/*/.ruff_cache/
