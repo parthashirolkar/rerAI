@@ -1,8 +1,11 @@
 type MessageLike = {
   content?: unknown;
   id?: string;
+  _id?: string;
   role?: string;
   type?: string;
+  createdAt?: number;
+  _creationTime?: number;
   getType?: () => string;
   _getType?: () => string;
 };
@@ -82,5 +85,29 @@ export function getMessageKey(message: unknown, index: number) {
     }
   }
 
+  if (message && typeof message === "object" && "_id" in message) {
+    const value = (message as MessageLike)._id;
+    if (value) {
+      return value;
+    }
+  }
+
   return `message-${index}`;
+}
+
+export function getMessageTimestamp(message: unknown) {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+
+  const candidate = message as MessageLike;
+  if (typeof candidate.createdAt === "number") {
+    return candidate.createdAt;
+  }
+
+  if (typeof candidate._creationTime === "number") {
+    return candidate._creationTime;
+  }
+
+  return null;
 }

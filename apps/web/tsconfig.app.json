@@ -14,8 +14,9 @@
     "strict": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@convex-generated/*": ["../convex/convex/_generated/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "../convex/convex/_generated/**/*.d.ts"]
 }
