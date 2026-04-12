@@ -42,6 +42,9 @@ The service exposes the subset of endpoints the current app needs, including:
 
 Use these only from local development or from the authenticated Convex proxy layer.
 
+The backend now also requires an internal shared secret header on every route except `/ok`.
+Convex must send `X-RerAI-Internal-Secret` with the value from `LANGGRAPH_INTERNAL_SHARED_SECRET`.
+
 ## Persistence
 
 `DATABASE_URI` is the single persistence setting for:
@@ -81,6 +84,7 @@ Recommended setup:
 For the authenticated Convex proxy, set:
 
 - `LANGGRAPH_INTERNAL_API_URL=http://<backend-service-name>.railway.internal:8000`
+- `LANGGRAPH_INTERNAL_SHARED_SECRET=<same-random-secret-on-convex-and-backend>`
 
 ## Supabase Postgres
 

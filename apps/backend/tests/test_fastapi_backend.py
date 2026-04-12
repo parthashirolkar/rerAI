@@ -77,9 +77,32 @@ def client(tmp_path: Path):
         graph=FakeGraph(),
         metadata_store=MetadataStore(database_uri),
     )
-    app = create_app(runtime)
+    app = create_app(runtime, internal_secret="test-secret")
     with TestClient(app) as test_client:
+        test_client.headers.update({"X-RerAI-Internal-Secret": "test-secret"})
         yield test_client
+
+
+def test_requires_internal_secret(tmp_path: Path):
+    database_uri = f"sqlite:///{tmp_path / 'rerai-test-auth.db'}"
+    runtime = BackendRuntime(
+        database_uri,
+        graph=FakeGraph(),
+        metadata_store=MetadataStore(database_uri),
+    )
+    app = create_app(runtime, internal_secret="test-secret")
+    with TestClient(app) as test_client:
+        ok = test_client.get("/ok")
+        assert ok.status_code == 200
+
+        blocked = test_client.get("/info")
+        assert blocked.status_code == 401
+
+        allowed = test_client.get(
+            "/info",
+            headers={"X-RerAI-Internal-Secret": "test-secret"},
+        )
+        assert allowed.status_code == 200
 
 
 def test_assistant_resolution(client: TestClient):

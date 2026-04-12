@@ -5,6 +5,7 @@ import { httpAction } from "./_generated/server";
 const LANGGRAPH_PROXY_PREFIX = "/langgraph";
 const FORWARDED_REQUEST_HEADERS = ["accept", "content-type", "last-event-id"];
 const RESERVED_THREAD_SEGMENTS = new Set(["search"]);
+const INTERNAL_SECRET_HEADER = "x-rerai-internal-secret";
 
 function getAllowedOrigin(origin: string | null) {
   const configuredOrigins = (process.env.CLIENT_ORIGINS ?? "")
@@ -110,6 +111,10 @@ export const proxy = httpAction(async (ctx, request) => {
   if (!internalApiUrl) {
     return jsonError("Missing LANGGRAPH_INTERNAL_API_URL", 500, allowedOrigin);
   }
+  const internalSharedSecret = process.env.LANGGRAPH_INTERNAL_SHARED_SECRET?.trim();
+  if (!internalSharedSecret) {
+    return jsonError("Missing LANGGRAPH_INTERNAL_SHARED_SECRET", 500, allowedOrigin);
+  }
 
   const identity = await ctx.auth.getUserIdentity();
   if (identity === null) {
@@ -140,9 +145,12 @@ export const proxy = httpAction(async (ctx, request) => {
     });
   }
 
+  const forwardHeaders = createForwardHeaders(request);
+  forwardHeaders.set(INTERNAL_SECRET_HEADER, internalSharedSecret);
+
   const response = await fetch(new URL(forwardPath, internalApiUrl), {
     method: request.method,
-    headers: createForwardHeaders(request),
+    headers: forwardHeaders,
     body: bodyBytes,
   });
 

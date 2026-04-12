@@ -13,8 +13,6 @@ from langchain_core.messages import BaseMessage
 from langchain_core.messages.base import message_to_dict
 from langgraph.types import Command, Send, StateSnapshot
 
-from rerai_agent.graph import build_graph
-
 from .db import MetadataStore, RunRecord, ThreadRecord, utc_now
 
 GRAPH_ID = "rerai"
@@ -267,9 +265,16 @@ class RunManager:
             for event in replay:
                 last_seen = event.stream_id
                 yield serialize_sse(event.stream_id, event.event, event.data)
+                if event.event == "end":
+                    return
             queue: asyncio.Queue[PersistedEvent | None] | None = None
             active = self.active_runs.get(run_id)
             if active is None:
+                run_record = await asyncio.to_thread(
+                    self.store.get_run, run_id, thread_id=thread_id
+                )
+                if run_record is not None and run_record.status != "running":
+                    return
                 return
             queue = asyncio.Queue()
             active.subscribers.add(queue)
@@ -282,6 +287,11 @@ class RunManager:
                     yield serialize_sse(event.stream_id, event.event, event.data)
                     if event.event == "end":
                         return
+                run_record = await asyncio.to_thread(
+                    self.store.get_run, run_id, thread_id=thread_id
+                )
+                if run_record is not None and run_record.status != "running":
+                    return
                 while True:
                     item = await queue.get()
                     if item is None:
@@ -448,11 +458,19 @@ class BackendRuntime:
         metadata_store: MetadataStore | None = None,
     ) -> None:
         self.database_uri = database_uri
-        self.graph = graph or build_graph()
+        self.graph = graph
         self.metadata_store = metadata_store or MetadataStore(database_uri)
-        self.run_manager = RunManager(self.metadata_store, self.graph)
+        self.run_manager: RunManager | None = (
+            RunManager(self.metadata_store, self.graph) if self.graph is not None else None
+        )
 
     async def setup(self) -> None:
+        if self.graph is None:
+            from rerai_agent.graph import build_graph
+
+            self.graph = build_graph()
+        if self.run_manager is None:
+            self.run_manager = RunManager(self.metadata_store, self.graph)
         await asyncio.to_thread(self.metadata_store.setup)
 
     async def get_assistant(self, assistant_id: str) -> dict[str, Any]:

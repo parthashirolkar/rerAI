@@ -9,13 +9,14 @@ The request path is:
 1. the rerAI frontend authenticates the user
 2. the frontend calls the Convex HTTP proxy at `/langgraph`
 3. Convex validates the user and enforces thread ownership
-4. Convex forwards the request to the internal backend service
+4. Convex forwards the request to the internal backend service and presents an internal shared-secret header
 5. the FastAPI backend runs the graph and returns a LangGraph-compatible thread/run response
 
 Important implication:
 - the backend is not the public auth boundary
 - the Convex proxy is the auth boundary
 - the backend should stay behind private networking or a trusted proxy
+- the backend also requires a Convex-presented shared secret on every route except `/ok`
 
 ## Apps
 
@@ -80,6 +81,7 @@ Minimum backend variables:
 App-level variables also matter:
 
 - Convex needs `LANGGRAPH_INTERNAL_API_URL` in deployed environments so it can reach the backend
+- Convex and the backend both need the same `LANGGRAPH_INTERNAL_SHARED_SECRET`
 - the web app needs the Convex site URL envs already used in `apps/web`
 
 ### Run everything
@@ -155,7 +157,7 @@ Deploy `apps/backend` as a dedicated Railway service using its Dockerfile.
 Expected production pattern:
 
 - backend is internal/private
-- Convex calls it through `LANGGRAPH_INTERNAL_API_URL`
+- Convex calls it through `LANGGRAPH_INTERNAL_API_URL` and `LANGGRAPH_INTERNAL_SHARED_SECRET`
 - frontend does not call the backend directly
 
 ### Web

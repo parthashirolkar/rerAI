@@ -66,6 +66,11 @@ def _default_database_uri() -> str:
     return os.getenv("DATABASE_URI", "sqlite:///tmp/rerai-backend.db")
 
 
+def _default_internal_secret() -> str:
+    value = os.getenv("LANGGRAPH_INTERNAL_SHARED_SECRET", "").strip()
+    return value
+
+
 def _require_supported_features(payload: StreamRunRequest) -> None:
     unsupported = {}
     for key in ("webhook", "after_seconds"):
@@ -113,12 +118,17 @@ def get_runtime(request: Request) -> BackendRuntime:
     return request.app.state.runtime
 
 
-def create_app(runtime: BackendRuntime | None = None) -> FastAPI:
+def create_app(
+    runtime: BackendRuntime | None = None,
+    *,
+    internal_secret: str | None = None,
+) -> FastAPI:
     load_project_env()
     database_uri = (
         runtime.database_uri if runtime is not None else (_default_database_uri())
     )
     active_runtime = runtime or BackendRuntime(database_uri)
+    shared_secret = internal_secret if internal_secret is not None else _default_internal_secret()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -127,6 +137,22 @@ def create_app(runtime: BackendRuntime | None = None) -> FastAPI:
         yield
 
     app = FastAPI(title="rerAI Backend", version="0.1.0", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def require_internal_secret(request: Request, call_next):
+        if request.url.path == "/ok":
+            return await call_next(request)
+
+        if not shared_secret:
+            return Response(
+                status_code=500,
+                content="Missing LANGGRAPH_INTERNAL_SHARED_SECRET",
+            )
+
+        provided = request.headers.get("x-rerai-internal-secret", "").strip()
+        if provided != shared_secret:
+            return Response(status_code=401, content="Unauthorized")
+        return await call_next(request)
 
     @app.get("/ok")
     async def ok() -> dict[str, bool]:
