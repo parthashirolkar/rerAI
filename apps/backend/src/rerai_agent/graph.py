@@ -6,7 +6,9 @@ from pathlib import Path
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.store.postgres import PostgresStore
+from langgraph.store.sqlite import SqliteStore
 
 from rerai_agent.subagents.definitions import ALL_SUBAGENTS
 from rerai_agent.tools.config import get_chat_model
@@ -116,6 +118,14 @@ def _is_postgres_uri(value: str) -> bool:
     return value.startswith("postgresql://") or value.startswith("postgres://")
 
 
+def _is_sqlite_uri(value: str) -> bool:
+    return value.strip().lower().startswith("sqlite://")
+
+
+def _sqlite_conn_string(value: str) -> str:
+    return value[len("sqlite://") :]
+
+
 def _init_persistence() -> tuple[PostgresSaver | None, PostgresStore | None]:
     global _persistence_stack, _checkpointer, _store
 
@@ -123,13 +133,24 @@ def _init_persistence() -> tuple[PostgresSaver | None, PostgresStore | None]:
         return _checkpointer, _store
 
     database_uri = os.getenv("DATABASE_URI", "").strip()
-    if not database_uri or not _is_postgres_uri(database_uri):
+    if not database_uri:
         return None, None
 
     stack = ExitStack()
     try:
-        store = stack.enter_context(PostgresStore.from_conn_string(database_uri))
-        checkpointer = stack.enter_context(PostgresSaver.from_conn_string(database_uri))
+        if _is_postgres_uri(database_uri):
+            store = stack.enter_context(PostgresStore.from_conn_string(database_uri))
+            checkpointer = stack.enter_context(
+                PostgresSaver.from_conn_string(database_uri)
+            )
+        elif _is_sqlite_uri(database_uri):
+            conn_string = _sqlite_conn_string(database_uri)
+            store = stack.enter_context(SqliteStore.from_conn_string(conn_string))
+            checkpointer = stack.enter_context(
+                SqliteSaver.from_conn_string(conn_string)
+            )
+        else:
+            return None, None
 
         if _env_enabled("LANGGRAPH_SETUP_DB", default="true"):
             store.setup()

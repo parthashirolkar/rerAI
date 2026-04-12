@@ -13,7 +13,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@auth/core": "0.37.0",
-        "@convex-dev/auth": "latest",
+        "@convex-dev/auth": "0.0.91",
         "convex": "^1.35.1",
       },
     },
@@ -21,7 +21,7 @@
       "name": "@rerai/web",
       "version": "0.1.0",
       "dependencies": {
-        "@convex-dev/auth": "latest",
+        "@convex-dev/auth": "0.0.91",
         "@langchain/langgraph-sdk": "^1.8.8",
         "@langchain/react": "^0.3.3",
         "class-variance-authority": "^0.7.1",

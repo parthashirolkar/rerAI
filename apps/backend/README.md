@@ -1,16 +1,21 @@
 # rerAI backend
 
-This app hosts the rerAI deepagents graph as a standalone LangGraph API server.
+This app hosts the rerAI deepagents graph behind a native FastAPI service that mimics the LangGraph thread/run surface the current web app already uses through Convex.
 
-It is a Python app managed with `uv` (`pyproject.toml` + `uv.lock`) and does not
-participate in Bun workspace package linking.
+The backend keeps:
+- the existing `rerai_agent.graph` graph
+- LangGraph checkpoint/store persistence
+- the existing Convex proxy contract and frontend SDK usage
+
+It replaces:
+- the hosted/self-hosted Agent Server dependency
 
 ## Local development
 
 1. Install dependencies:
 
 ```bash
-uv sync
+/home/partha/.local/bin/uv sync
 ```
 
 2. Copy the backend env template to the repo root and fill secrets:
@@ -19,59 +24,71 @@ uv sync
 cp .env.example ../../.env
 ```
 
-3. Start LangGraph API server:
+3. Start the FastAPI backend:
 
 ```bash
-uv run langgraph dev
+/home/partha/.local/bin/uv run uvicorn app:app --reload --host 127.0.0.1 --port 8123
 ```
 
-The API will expose endpoints like `/threads`, `/runs`, and `/threads/{id}/runs/stream`.
+The service exposes the subset of endpoints the current app needs, including:
+- `/ok`
+- `/info`
+- `/assistants/{assistant_id}`
+- `/threads`
+- `/threads/{thread_id}/state`
+- `/threads/{thread_id}/history`
+- `/threads/{thread_id}/runs/stream`
+- `/threads/{thread_id}/runs/{run_id}/stream`
 
-## Docker image build
+Use these only from local development or from the authenticated Convex proxy layer.
 
-Build image:
+## Persistence
 
-```bash
-uv run langgraph build -t rerai-langgraph-api
-```
+`DATABASE_URI` is the single persistence setting for:
+- LangGraph checkpoints/store
+- rerAI thread metadata
+- rerAI run metadata
+- persisted SSE replay events
 
-Run image:
+Supported values:
+- SQLite for local dev, for example `sqlite:///tmp/rerai-backend.db`
+- Postgres for Railway/Supabase, for example `postgresql://...`
 
-```bash
-docker run --rm -p 8123:8000 --env-file ../../.env rerai-langgraph-api
-```
+If `LANGGRAPH_SETUP_DB=true`, startup creates:
+- LangGraph checkpoint/store tables
+- `rerai_threads`
+- `rerai_runs`
+- `rerai_run_events`
 
-Health check:
+Redis is intentionally not used in MVP1. Streaming fanout is handled in-process and is only safe for a single Railway replica.
 
-```bash
-curl http://localhost:8123/ok
-```
+## Railway deployment
 
-## Persistence env vars
+Use a dedicated Railway service with root directory set to `apps/backend`.
 
-Use these variables in Railway (or any Docker host):
+This repo includes:
+- `apps/backend/Dockerfile`: builds the FastAPI backend directly
+- `apps/backend/railway.json`: Dockerfile deploys, `/ok` health checks, restart policy
 
-- `DATABASE_URI`: Postgres for assistants/threads/runs/checkpoints/store.
-- `LANGGRAPH_SETUP_DB`: If `true`, runs `store.setup()` and `checkpointer.setup()` at startup.
-- `REDIS_URI`: Redis pub-sub for streaming and background jobs.
-- `LANGGRAPH_POSTGRES_POOL_MAX_SIZE`: Tune connections for free-tier DB limits.
-- `N_JOBS_PER_WORKER`: Controls background worker concurrency.
-- `BG_JOB_ISOLATED_LOOPS`: Recommended for graphs with blocking code.
+Recommended setup:
 
-In addition, configure application env vars used by tools:
+1. Create a new Railway service for `apps/backend`.
+2. Set the root directory to `apps/backend`.
+3. Set `DATABASE_URI` to a Supabase or Railway Postgres connection string.
+4. Keep `LANGGRAPH_SETUP_DB=true` on the first deploy.
+5. Deploy from GitHub.
 
-- `OPENROUTER_API_KEY`
-- `CHROMA_API_KEY`
-- `CHROMA_TENANT`
-- `CHROMA_DATABASE`
-- `MAHARERA_PUBLIC_USERNAME` (optional)
-- `MAHARERA_PUBLIC_PASSWORD` (optional)
-- `MAHARERA_CRYPTOJS_KEY` (optional)
-- `UDCPR_PDF_DIR` (optional)
+For the authenticated Convex proxy, set:
 
-If you set `UDCPR_PDF_DIR`, use a path relative to `apps/backend` (for example,
-`../../data/pdfs`) or an absolute path.
+- `LANGGRAPH_INTERNAL_API_URL=http://<backend-service-name>.railway.internal:8000`
 
-The exported graph (`rerai_agent.graph:graph`) reads `DATABASE_URI` at import time.
-When present, it wires both `PostgresSaver` and `PostgresStore` into `create_deep_agent(...)`
-so conversations/checkpoints are persisted automatically in the Dockerized LangGraph server.
+## Supabase Postgres
+
+Supabase works as the production backing store because the backend only needs a standard Postgres connection string.
+
+Recommended setup:
+- use the direct Postgres connection string when available
+- include `sslmode=require` if needed
+- keep the service single-replica until Redis-backed fanout exists
+
+Convex still stores application-facing chat metadata and auth state. This backend stores runtime thread/run state and resumable event replay data.

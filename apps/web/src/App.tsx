@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { useStream } from "@langchain/react";
-import { useAuthActions } from "@convex-dev/auth/react";
+import { useAuthActions, useAuthToken } from "@convex-dev/auth/react";
 import {
   Authenticated,
   AuthLoading,
@@ -48,10 +48,10 @@ import { ReportPanel } from "./components/ReportPanel";
 import { Transcript } from "./components/Transcript";
 import { api } from "./lib/convexApi";
 import {
-  API_URL,
   ASSISTANT_ID,
   clearPersistedRunId,
   clearPersistedThreadId,
+  createLangGraphClient,
   getPersistedRunId,
   getPersistedThreadId,
   persistRunId,
@@ -130,6 +130,7 @@ export default function App() {
 
 function AuthenticatedApp() {
   const { signOut } = useAuthActions();
+  const authToken = useAuthToken();
   const { isAuthenticated } = useConvexAuth();
 
   const ensureViewer = useMutation(api.users.ensureViewer);
@@ -266,8 +267,10 @@ function AuthenticatedApp() {
     [updatePreferences, viewerReady],
   );
 
+  const langgraphClient = useMemo(() => createLangGraphClient(authToken), [authToken]);
+
   const stream = useStream<Record<string, unknown>>({
-    apiUrl: API_URL,
+    client: langgraphClient,
     assistantId: ASSISTANT_ID,
     threadId: langgraphThreadId,
     fetchStateHistory: true,

@@ -15,8 +15,8 @@ bun run lint
 
 # Backend
 cd apps/backend && uv sync
-cd apps/backend && uv run langgraph dev
-cd apps/backend && uv run langgraph build -t rerai-langgraph-api
+cd apps/backend && uv run uvicorn app:app --reload --host 127.0.0.1 --port 8123
+docker build -t rerai-backend ./apps/backend
 
 # Linting & Formatting (Ruff)
 cd apps/backend && uv run ruff check .
@@ -56,7 +56,7 @@ trigger: When to activate this skill
 
 ## Repo Layout
 
-- `apps/backend`: Python agent runtime and LangGraph Docker backend
+- `apps/backend`: Python agent runtime and FastAPI backend
 - `apps/web`: React frontend
 - `apps/convex`: Convex app
 

@@ -1,8 +1,48 @@
-export const API_URL = import.meta.env.VITE_LANGGRAPH_API_URL ?? "http://localhost:8123";
+import { Client } from "@langchain/langgraph-sdk";
+
 export const ASSISTANT_ID = "rerai";
 
 const THREAD_STORAGE_KEY = "rerai.thread-id";
 const RUN_STORAGE_KEY = "rerai.active-run-id";
+
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/$/, "");
+}
+
+function resolveConvexSiteUrl() {
+  const explicitSiteUrl = import.meta.env.VITE_CONVEX_SITE_URL?.trim();
+  if (explicitSiteUrl) {
+    return trimTrailingSlash(explicitSiteUrl);
+  }
+
+  const convexUrl = import.meta.env.VITE_CONVEX_URL?.trim();
+  if (convexUrl?.includes(".convex.cloud")) {
+    return trimTrailingSlash(convexUrl.replace(".convex.cloud", ".convex.site"));
+  }
+
+  throw new Error("Missing VITE_CONVEX_SITE_URL");
+}
+
+const PROXY_API_URL = `${resolveConvexSiteUrl()}/langgraph`;
+
+export function createLangGraphClient(authToken: string | null) {
+  return new Client({
+    apiUrl: PROXY_API_URL,
+    callerOptions: {
+      fetch: (input: string | URL | globalThis.Request, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        if (authToken) {
+          headers.set("Authorization", `Bearer ${authToken}`);
+        }
+
+        return fetch(input, {
+          ...init,
+          headers,
+        });
+      },
+    },
+  });
+}
 
 function readStorage(key: string) {
   if (typeof window === "undefined") {

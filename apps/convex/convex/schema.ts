@@ -41,6 +41,13 @@ export default defineSchema({
     .index("by_userId_and_updatedAt", ["userId", "updatedAt"])
     .index("by_userId_and_createdAt", ["userId", "createdAt"])
     .index("by_langgraphThreadId", ["langgraphThreadId"]),
+  langgraphThreads: defineTable({
+    userId: v.id("users"),
+    langgraphThreadId: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_langgraphThreadId", ["langgraphThreadId"])
+    .index("by_userId_and_createdAt", ["userId", "createdAt"]),
   uiMessages: defineTable({
     userId: v.id("users"),
     threadId: v.id("uiThreads"),

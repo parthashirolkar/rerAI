@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@convex-dev/auth": "latest",
+    "@convex-dev/auth": "0.0.91",
     "@langchain/langgraph-sdk": "^1.8.8",
     "@langchain/react": "^0.3.3",
     "class-variance-authority": "^0.7.1",
