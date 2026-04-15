@@ -73,18 +73,28 @@ This repo includes:
 - `apps/backend/Dockerfile`: builds the FastAPI backend directly
 - `apps/backend/railway.json`: Dockerfile deploys, `/ok` health checks, restart policy
 
+The Dockerfile binds Uvicorn to `0.0.0.0:${PORT:-8000}` so the same image works both:
+- on Railway, where `PORT` is injected at runtime
+- locally, where it falls back to `8000`
+
 Recommended setup:
 
 1. Create a new Railway service for `apps/backend`.
 2. Set the root directory to `apps/backend`.
-3. Set `DATABASE_URI` to a Supabase or Railway Postgres connection string.
-4. Keep `LANGGRAPH_SETUP_DB=true` on the first deploy.
-5. Deploy from GitHub.
+3. Keep the backend service private/internal only.
+4. Set `DATABASE_URI` to a Supabase or Railway Postgres connection string.
+5. Set `LANGGRAPH_INTERNAL_SHARED_SECRET` on the backend service.
+6. Keep `LANGGRAPH_SETUP_DB=true` on the first deploy.
+7. Deploy from GitHub.
 
 For the authenticated Convex proxy, set:
 
-- `LANGGRAPH_INTERNAL_API_URL=http://<backend-service-name>.railway.internal:8000`
+- `LANGGRAPH_INTERNAL_API_URL` to the internal Railway URL for the backend service
 - `LANGGRAPH_INTERNAL_SHARED_SECRET=<same-random-secret-on-convex-and-backend>`
+
+Notes:
+- Railway injects the runtime port, so the backend container must not assume `8000` is the actual listening port in production.
+- Convex and the backend must use the same `LANGGRAPH_INTERNAL_SHARED_SECRET`.
 
 ## Supabase Postgres
 
