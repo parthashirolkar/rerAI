@@ -162,7 +162,27 @@ Expected production pattern:
 
 ### Web
 
-Deploy `apps/web` to Vercel, Cloudflare Pages, or another static/frontend host.
+Deploy `apps/web` to a static host. The recommended default is Cloudflare Pages.
+
+Production web env vars:
+
+- `VITE_CONVEX_URL`
+- `VITE_CONVEX_SITE_URL`
+
+The frontend does not need Google OAuth secrets or backend secrets. It only needs the public Convex URLs.
+
+### Google OAuth
+
+Google OAuth is handled by Convex Auth, not by the frontend host.
+
+Set these on the Convex deployment:
+
+- `AUTH_GOOGLE_ID`
+- `AUTH_GOOGLE_SECRET`
+
+The Google OAuth redirect URI must point at the Convex Site domain:
+
+- `https://<your-convex-site>.convex.site/api/auth/callback/google`
 
 ### Convex
 
@@ -171,6 +191,14 @@ Deploy `apps/convex` with:
 ```bash
 bun run convex:deploy
 ```
+
+Production Convex env vars include:
+
+- `LANGGRAPH_INTERNAL_API_URL`
+- `LANGGRAPH_INTERNAL_SHARED_SECRET`
+- `CLIENT_ORIGINS`
+- `AUTH_GOOGLE_ID`
+- `AUTH_GOOGLE_SECRET`
 
 ## Repo notes
 

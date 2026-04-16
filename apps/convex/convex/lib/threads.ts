@@ -1,3 +1,4 @@
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 
 import { getViewer } from "./auth";
@@ -15,14 +16,14 @@ export function buildPreview(content: string) {
 
 export async function requireThreadOwner(
   ctx: ThreadAccessCtx,
-  threadId: string,
+  threadId: Id<"uiThreads">,
 ) {
   const { user, userId } = await getViewer(ctx);
-  const thread = await ctx.db.get(threadId as never);
+  const thread = await ctx.db.get(threadId);
 
   if (thread === null || thread.userId !== userId) {
     throw new Error("Unauthorized");
   }
 
-  return { thread, user, userId };
+  return { thread: thread as Doc<"uiThreads">, user, userId };
 }
