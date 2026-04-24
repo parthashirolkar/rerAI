@@ -341,11 +341,6 @@ class RunManager:
                     yield serialize_sse(event.stream_id, event.event, event.data)
                     if event.event == "end":
                         return
-                run_record = await asyncio.to_thread(
-                    self.store.get_run, run_id, thread_id=thread_id
-                )
-                if run_record is not None and run_record.status != "running":
-                    return
                 while True:
                     item = await queue.get()
                     if item is None:
