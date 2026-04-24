@@ -168,6 +168,24 @@ export const attachLangGraphThread = mutation({
   },
 });
 
+export const detachLangGraphThread = mutation({
+  args: {
+    threadId: v.id("uiThreads"),
+  },
+  handler: async (ctx, args) => {
+    const { thread } = await requireThreadOwner(ctx, args.threadId);
+    if (thread.langgraphThreadId === undefined) {
+      return thread;
+    }
+
+    await ctx.db.patch(thread._id, {
+      langgraphThreadId: undefined,
+      updatedAt: Date.now(),
+    });
+    return await ctx.db.get(thread._id);
+  },
+});
+
 export const updatePreviewAndCounts = mutation({
   args: {
     threadId: v.id("uiThreads"),

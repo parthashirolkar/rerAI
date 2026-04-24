@@ -139,10 +139,18 @@ export const proxy = httpAction(async (ctx, request) => {
   const threadIdFromBody = readThreadIdFromJsonBody(pathname, contentType, bodyText);
   const threadId = threadIdFromPath ?? threadIdFromBody;
   if (threadId) {
-    await ctx.runMutation(internal.langgraphThreads.authorizeThreadAccess, {
-      userId,
-      langgraphThreadId: threadId,
-    });
+    try {
+      await ctx.runMutation(internal.langgraphThreads.authorizeThreadAccess, {
+        userId,
+        langgraphThreadId: threadId,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Unauthorized LangGraph thread access")) {
+        return jsonError("Unauthorized LangGraph thread access", 403, allowedOrigin);
+      }
+      throw error;
+    }
   }
 
   const forwardHeaders = createForwardHeaders(request);

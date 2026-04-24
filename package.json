@@ -15,7 +15,7 @@
         "convex:dev": "cd apps/convex && bun run dev",
         "convex:deploy": "cd apps/convex && bun run deploy",
         "lint": "bun run backend:lint",
-        "dev": "concurrently -k -n backend,web,convex -c blue,green,magenta \"bun run backend:dev\" \"bun run web:dev\" \"bun run convex:dev\"",
+        "dev": "concurrently -k -n backend,web,convex -c \"blue.bold,green.bold,magenta.bold\" \"bun run backend:dev\" \"bun run web:dev\" \"bun run convex:dev\"",
         "test": "bun run backend:test && bun run web:build",
         "build": "bun run web:build"
     },

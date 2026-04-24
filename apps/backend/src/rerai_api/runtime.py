@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -18,11 +19,12 @@ from .db import MetadataStore, RunRecord, ThreadRecord, utc_now
 GRAPH_ID = "rerai"
 SYSTEM_ASSISTANT_NAMESPACE = UUID("6ba7b821-9dad-11d1-80b4-00c04fd430c8")
 SYSTEM_ASSISTANT_ID = str(uuid5(SYSTEM_ASSISTANT_NAMESPACE, GRAPH_ID))
+logger = logging.getLogger(__name__)
 
 
 def json_safe(value: Any) -> Any:
     if isinstance(value, BaseMessage):
-        return message_to_dict(value)
+        return serialize_message(value)
     if isinstance(value, datetime):
         return value.astimezone(UTC).isoformat()
     if isinstance(value, UUID):
@@ -37,6 +39,36 @@ def json_safe(value: Any) -> Any:
         return jsonable_encoder(value)
     except Exception:
         return str(value)
+
+
+def serialize_message(message: BaseMessage) -> dict[str, Any]:
+    raw = message_to_dict(message)
+    if not isinstance(raw, dict):
+        return {"type": getattr(message, "type", "unknown"), "content": str(message)}
+
+    data = raw.get("data")
+    if not isinstance(data, dict):
+        return jsonable_encoder(raw)
+
+    payload: dict[str, Any] = {
+        "type": str(raw.get("type") or data.get("type") or getattr(message, "type", "unknown"))
+    }
+    for key in (
+        "content",
+        "id",
+        "name",
+        "tool_calls",
+        "invalid_tool_calls",
+        "tool_call_id",
+        "status",
+        "artifact",
+        "additional_kwargs",
+        "response_metadata",
+        "usage_metadata",
+    ):
+        if key in data and data[key] is not None:
+            payload[key] = json_safe(data[key])
+    return payload
 
 
 def parse_stream_modes(value: Any) -> list[str]:
@@ -56,6 +88,13 @@ def parse_stream_modes(value: Any) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         return [str(item) for item in value] or ["values"]
     return ["values"]
+
+
+def graph_stream_modes(stream_modes: list[str]) -> list[str]:
+    return [
+        "messages" if stream_mode == "messages-tuple" else stream_mode
+        for stream_mode in stream_modes
+    ]
 
 
 def parse_assistant_id(assistant_id: str) -> str:
@@ -182,6 +221,13 @@ class ActiveRun:
     subscribers: set[asyncio.Queue[PersistedEvent | None]]
 
 
+def describe_exception(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return message
+    return f"{type(exc).__name__}: {exc!r}"
+
+
 class RunManager:
     def __init__(self, store: MetadataStore, graph) -> None:
         self.store = store
@@ -270,6 +316,14 @@ class RunManager:
             queue: asyncio.Queue[PersistedEvent | None] | None = None
             active = self.active_runs.get(run_id)
             if active is None:
+                final_events = await asyncio.to_thread(
+                    self.store.list_run_events, run_id, after_id=last_seen
+                )
+                for event in final_events:
+                    last_seen = event.stream_id
+                    yield serialize_sse(event.stream_id, event.event, event.data)
+                    if event.event == "end":
+                        return
                 run_record = await asyncio.to_thread(
                     self.store.get_run, run_id, thread_id=thread_id
                 )
@@ -330,7 +384,7 @@ class RunManager:
                 input_value,
                 config=config,
                 context=payload.get("context"),
-                stream_mode=stream_modes,
+                stream_mode=graph_stream_modes(stream_modes),
                 interrupt_before=payload.get("interrupt_before"),
                 interrupt_after=payload.get("interrupt_after"),
                 durability=payload.get("durability"),
@@ -360,14 +414,19 @@ class RunManager:
             await self._emit(run_id, thread_id, "error", {"message": "Run cancelled"})
             raise
         except Exception as exc:
+            message = describe_exception(exc)
+            logger.exception(
+                "Run failed",
+                extra={"run_id": run_id, "thread_id": thread_id, "assistant_id": assistant_id},
+            )
             await asyncio.to_thread(
                 self.store.finish_run,
                 run_id=run_id,
                 thread_id=thread_id,
                 status="error",
-                error={"message": str(exc)},
+                error={"message": message},
             )
-            await self._emit(run_id, thread_id, "error", {"message": str(exc)})
+            await self._emit(run_id, thread_id, "error", {"message": message})
         finally:
             await self._emit(run_id, thread_id, "end", None)
             async with self._lock:
@@ -401,6 +460,8 @@ def normalize_stream_chunk(chunk: Any) -> tuple[str, Any]:
     if isinstance(chunk, tuple):
         if len(chunk) == 2:
             event, data = chunk
+            if isinstance(event, BaseMessage):
+                return "messages", chunk
             return str(event), data
         if len(chunk) == 3:
             event, namespace, data = chunk
@@ -466,9 +527,11 @@ class BackendRuntime:
 
     async def setup(self) -> None:
         if self.graph is None:
-            from rerai_agent.graph import build_graph
+            from rerai_agent.graph import build_persisted_graph_async
 
-            self.graph = build_graph()
+            self.graph = await build_persisted_graph_async(
+                database_uri=self.database_uri
+            )
         if self.run_manager is None:
             self.run_manager = RunManager(self.metadata_store, self.graph)
         await asyncio.to_thread(self.metadata_store.setup)

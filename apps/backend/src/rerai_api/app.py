@@ -114,6 +114,15 @@ def _base_thread_config(
     return {"configurable": configurable}
 
 
+def _raise_if_missing_checkpointer(exc: Exception, *, detail: str) -> None:
+    if isinstance(exc, ValueError) and str(exc) == "No checkpointer set":
+        raise HTTPException(status_code=503, detail=detail) from exc
+
+
+def _history_fallback_enabled(exc: Exception) -> bool:
+    return isinstance(exc, NotImplementedError)
+
+
 def get_runtime(request: Request) -> BackendRuntime:
     return request.app.state.runtime
 
@@ -245,10 +254,17 @@ def create_app(
             raise HTTPException(
                 status_code=404, detail=f"Thread '{thread_id}' not found"
             )
-        snapshot = await get_runtime(request).graph.aget_state(
-            _base_thread_config(thread_id),
-            subgraphs=subgraphs,
-        )
+        try:
+            snapshot = await get_runtime(request).graph.aget_state(
+                _base_thread_config(thread_id),
+                subgraphs=subgraphs,
+            )
+        except Exception as exc:
+            _raise_if_missing_checkpointer(
+                exc,
+                detail="Thread state is unavailable because persistence is disabled",
+            )
+            raise
         return format_state_snapshot(snapshot)
 
     @app.post("/threads/{thread_id}/history")
@@ -262,13 +278,28 @@ def create_app(
             raise HTTPException(
                 status_code=404, detail=f"Thread '{thread_id}' not found"
             )
-        history = get_runtime(request).graph.aget_state_history(
-            _base_thread_config(thread_id, payload.checkpoint),
-            filter=payload.metadata,
-            before=_parse_before_config(thread_id, payload.before),
-            limit=payload.limit,
-        )
-        snapshots = [format_state_snapshot(snapshot) async for snapshot in history]
+        try:
+            history = get_runtime(request).graph.aget_state_history(
+                _base_thread_config(thread_id, payload.checkpoint),
+                filter=payload.metadata,
+                before=_parse_before_config(thread_id, payload.before),
+                limit=payload.limit,
+            )
+            snapshots = [format_state_snapshot(snapshot) async for snapshot in history]
+        except Exception as exc:
+            _raise_if_missing_checkpointer(
+                exc,
+                detail="Thread history is unavailable because persistence is disabled",
+            )
+            if _history_fallback_enabled(exc):
+                try:
+                    snapshot = await get_runtime(request).graph.aget_state(
+                        _base_thread_config(thread_id, payload.checkpoint)
+                    )
+                except NotImplementedError:
+                    return []
+                return [format_state_snapshot(snapshot)]
+            raise
         return snapshots
 
     @app.post("/runs/stream")

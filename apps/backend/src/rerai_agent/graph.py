@@ -1,14 +1,19 @@
 import atexit
+import asyncio
 import os
-from contextlib import ExitStack
+from contextlib import AsyncExitStack, ExitStack
 from pathlib import Path
 
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.postgres import PostgresStore
+from langgraph.store.postgres.aio import AsyncPostgresStore
 from langgraph.store.sqlite import SqliteStore
+from langgraph.store.sqlite.aio import AsyncSqliteStore
 
 from rerai_agent.subagents.definitions import ALL_SUBAGENTS
 from rerai_agent.tools.config import get_chat_model
@@ -104,8 +109,11 @@ MEMORY_FILE = BASE_DIR / "memory" / "AGENT_KNOWLEDGE.md"
 SKILLS_DIR = BASE_DIR / "skills"
 
 _persistence_stack: ExitStack | None = None
-_checkpointer: PostgresSaver | None = None
-_store: PostgresStore | None = None
+_checkpointer: PostgresSaver | SqliteSaver | None = None
+_store: PostgresStore | SqliteStore | None = None
+_async_persistence_stack: AsyncExitStack | None = None
+_async_checkpointer: AsyncPostgresSaver | AsyncSqliteSaver | None = None
+_async_store: AsyncPostgresStore | AsyncSqliteStore | None = None
 
 
 def _env_enabled(name: str, default: str = "true") -> bool:
@@ -126,14 +134,18 @@ def _sqlite_conn_string(value: str) -> str:
     return value[len("sqlite://") :]
 
 
-def _init_persistence() -> tuple[PostgresSaver | None, PostgresStore | None]:
+def _init_persistence(
+    database_uri: str | None = None,
+) -> tuple[PostgresSaver | SqliteSaver | None, PostgresStore | SqliteStore | None]:
     global _persistence_stack, _checkpointer, _store
 
     if _checkpointer is not None or _store is not None:
         return _checkpointer, _store
 
-    database_uri = os.getenv("DATABASE_URI", "").strip()
+    database_uri = (database_uri or os.getenv("DATABASE_URI", "")).strip()
     if not database_uri:
+        return None, None
+    if _is_sqlite_uri(database_uri):
         return None, None
 
     stack = ExitStack()
@@ -165,11 +177,68 @@ def _init_persistence() -> tuple[PostgresSaver | None, PostgresStore | None]:
         raise
 
 
+async def _ainit_persistence(
+    database_uri: str | None = None,
+) -> tuple[
+    AsyncPostgresSaver | AsyncSqliteSaver | None,
+    AsyncPostgresStore | AsyncSqliteStore | None,
+]:
+    global _async_persistence_stack, _async_checkpointer, _async_store
+
+    database_uri = (database_uri or os.getenv("DATABASE_URI", "")).strip()
+    if not database_uri:
+        return None, None
+
+    if _async_checkpointer is not None or _async_store is not None:
+        return _async_checkpointer, _async_store
+
+    stack = AsyncExitStack()
+    try:
+        if _is_sqlite_uri(database_uri):
+            conn_string = _sqlite_conn_string(database_uri)
+            store = await stack.enter_async_context(
+                AsyncSqliteStore.from_conn_string(conn_string)
+            )
+            checkpointer = await stack.enter_async_context(
+                AsyncSqliteSaver.from_conn_string(conn_string)
+            )
+        elif _is_postgres_uri(database_uri):
+            store = await stack.enter_async_context(
+                AsyncPostgresStore.from_conn_string(database_uri)
+            )
+            checkpointer = await stack.enter_async_context(
+                AsyncPostgresSaver.from_conn_string(database_uri)
+            )
+        else:
+            await stack.aclose()
+            return None, None
+
+        if _env_enabled("LANGGRAPH_SETUP_DB", default="true"):
+            await store.setup()
+            await checkpointer.setup()
+
+        _async_persistence_stack = stack
+        _async_store = store
+        _async_checkpointer = checkpointer
+        return _async_checkpointer, _async_store
+    except Exception:
+        await stack.aclose()
+        raise
+
+
 def _close_persistence() -> None:
     global _persistence_stack
     if _persistence_stack is not None:
         _persistence_stack.close()
         _persistence_stack = None
+
+    global _async_persistence_stack
+    if _async_persistence_stack is not None:
+        try:
+            asyncio.run(_async_persistence_stack.aclose())
+        except Exception:
+            pass
+        _async_persistence_stack = None
 
 
 atexit.register(_close_persistence)
@@ -190,10 +259,34 @@ def build_graph(checkpointer=None, store=None, backend=None, interrupt_on=None):
     )
 
 
-_default_checkpointer, _default_store = _init_persistence()
+def build_persisted_graph(
+    *,
+    database_uri: str | None = None,
+    backend=None,
+    interrupt_on=None,
+):
+    checkpointer, store = _init_persistence(database_uri)
+    return build_graph(
+        checkpointer=checkpointer,
+        store=store,
+        backend=backend,
+        interrupt_on=interrupt_on,
+    )
 
-graph = build_graph(
-    checkpointer=_default_checkpointer,
-    store=_default_store,
-    interrupt_on={t.name: True for t in ALL_TOOLS},
-)
+
+async def build_persisted_graph_async(
+    *,
+    database_uri: str | None = None,
+    backend=None,
+    interrupt_on=None,
+):
+    checkpointer, store = await _ainit_persistence(database_uri)
+    return build_graph(
+        checkpointer=checkpointer,
+        store=store,
+        backend=backend,
+        interrupt_on=interrupt_on,
+    )
+
+
+graph = build_persisted_graph(interrupt_on={t.name: True for t in ALL_TOOLS})

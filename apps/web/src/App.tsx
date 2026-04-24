@@ -52,12 +52,11 @@ import {
   clearPersistedRunId,
   clearPersistedThreadId,
   createLangGraphClient,
-  getPersistedRunId,
-  getPersistedThreadId,
   persistRunId,
   persistThreadId,
 } from "./lib/langgraphClient";
 import {
+  extractThreadStateMessages,
   extractMessageText,
   getMessageTimestamp,
   isAssistantMessage,
@@ -80,6 +79,7 @@ type ConvexThread = {
   title: string;
   langgraphThreadId?: string;
   updatedAt: number;
+  userId?: string;
 };
 
 type DisplayMessage = {
@@ -137,6 +137,7 @@ function AuthenticatedApp() {
   const createThread = useMutation(api.threads.create);
   const removeThread = useMutation(api.threads.remove);
   const attachLangGraphThread = useMutation(api.threads.attachLangGraphThread);
+  const detachLangGraphThread = useMutation(api.threads.detachLangGraphThread);
   const appendUserMessage = useMutation(api.messages.appendUserMessage);
   const syncAssistantMessages = useMutation(api.messages.syncAssistantMessages);
   const updatePreferences = useMutation(api.preferences.updateMine);
@@ -147,13 +148,10 @@ function AuthenticatedApp() {
 
   const [viewerReady, setViewerReady] = useState(false);
   const [draft, setDraft] = useState("");
+  const [threadsHydrated, setThreadsHydrated] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
-  const [langgraphThreadId, setLanggraphThreadId] = useState<string | null>(() =>
-    getPersistedThreadId(),
-  );
-  const [activeRunId, setActiveRunId] = useState<string | null>(() =>
-    getPersistedRunId(),
-  );
+  const [langgraphThreadId, setLanggraphThreadId] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [statusNote, setStatusNote] = useState("");
   const [lastSubmittedAt, setLastSubmittedAt] = useState<number | null>(null);
   const [progressTick, setProgressTick] = useState(0);
@@ -176,6 +174,14 @@ function AuthenticatedApp() {
     if (!isAuthenticated) {
       setViewerReady(false);
       hydratedPreferencesRef.current = false;
+      setThreadsHydrated(false);
+      setSelectedThreadId(null);
+      selectedThreadIdRef.current = null;
+      setLanggraphThreadId(null);
+      setActiveRunId(null);
+      setLastSubmittedAt(null);
+      clearPersistedThreadId();
+      clearPersistedRunId();
       return;
     }
 
@@ -206,17 +212,30 @@ function AuthenticatedApp() {
     () => threads.find((thread) => thread._id === selectedThreadId) ?? null,
     [selectedThreadId, threads],
   );
+  const hydratedThread =
+    threadsHydrated && viewer && selectedThread?.userId === viewer._id ? selectedThread : null;
 
   const runState = useQuery(
     api.runState.getForThread,
-    viewerReady && selectedThreadId ? { threadId: selectedThreadId } : "skip",
+    viewerReady && hydratedThread ? { threadId: hydratedThread._id } : "skip",
   );
 
   const paginatedMessages = usePaginatedQuery(
     api.messages.listByThread,
-    viewerReady && selectedThreadId ? { threadId: selectedThreadId } : "skip",
+    viewerReady && hydratedThread ? { threadId: hydratedThread._id } : "skip",
     { initialNumItems: 50 },
   );
+
+  useEffect(() => {
+    hydratedPreferencesRef.current = false;
+    setThreadsHydrated(false);
+    setSelectedThreadId(null);
+    selectedThreadIdRef.current = null;
+    setLanggraphThreadId(null);
+    setActiveRunId(null);
+    clearPersistedThreadId();
+    clearPersistedRunId();
+  }, [viewer?._id]);
 
   useEffect(() => {
     if (
@@ -229,26 +248,57 @@ function AuthenticatedApp() {
     }
 
     hydratedPreferencesRef.current = true;
+    setThreadsHydrated(false);
     setSidebarWidth(preferences.sidebarWidth ?? SIDEBAR_DEFAULT);
     setSidebarOpen(preferences.sidebarOpen ?? true);
 
-    const initialThreadId =
-      preferences.lastOpenedThreadId ??
-      threads[0]?._id ??
-      null;
+    const preferredThread =
+      preferences.lastOpenedThreadId === undefined
+        ? null
+        : (threads.find((thread) => thread._id === preferences.lastOpenedThreadId) ?? null);
+    const initialThread = preferredThread ?? threads[0] ?? null;
 
-    if (initialThreadId) {
-      const initialThread = threads.find((thread) => thread._id === initialThreadId) ?? null;
-      setSelectedThreadId(initialThreadId);
-      selectedThreadIdRef.current = initialThreadId;
-      setLanggraphThreadId(initialThread?.langgraphThreadId ?? null);
-      if (initialThread?.langgraphThreadId) {
-        persistThreadId(initialThread.langgraphThreadId);
-      } else {
-        clearPersistedThreadId();
+    if (!initialThread) {
+      setSelectedThreadId(null);
+      selectedThreadIdRef.current = null;
+      setLanggraphThreadId(null);
+      setActiveRunId(null);
+      clearPersistedThreadId();
+      clearPersistedRunId();
+      if (preferences.lastOpenedThreadId !== undefined) {
+        void updatePreferences({ lastOpenedThreadId: null }).catch((error) => {
+          setStatusNote(error instanceof Error ? error.message : String(error));
+        });
       }
+      setThreadsHydrated(true);
+      return;
     }
-  }, [preferences, threads, threadsResult, viewerReady]);
+
+    setSelectedThreadId(initialThread._id);
+    selectedThreadIdRef.current = initialThread._id;
+    setLanggraphThreadId(initialThread.langgraphThreadId ?? null);
+    setActiveRunId(null);
+
+    if (initialThread.langgraphThreadId) {
+      persistThreadId(initialThread.langgraphThreadId);
+    } else {
+      clearPersistedThreadId();
+    }
+
+    if (preferredThread?.langgraphThreadId !== initialThread.langgraphThreadId) {
+      clearPersistedRunId();
+    }
+    if (
+      preferences.lastOpenedThreadId !== undefined &&
+      preferredThread === null &&
+      initialThread._id !== preferences.lastOpenedThreadId
+    ) {
+      void updatePreferences({ lastOpenedThreadId: initialThread._id }).catch((error) => {
+        setStatusNote(error instanceof Error ? error.message : String(error));
+      });
+    }
+    setThreadsHydrated(true);
+  }, [preferences, threads, threadsResult, updatePreferences, viewerReady]);
 
   const persistPreferenceSnapshot = useCallback(
     (next: { sidebarOpen?: boolean; sidebarWidth?: number; lastOpenedThreadId?: string | null }) => {
@@ -265,6 +315,31 @@ function AuthenticatedApp() {
       });
     },
     [updatePreferences, viewerReady],
+  );
+
+  const recoverBrokenLangGraphThread = useCallback(
+    async (threadId: string | null, message: string) => {
+      if (!threadId || !message.includes("Unauthorized LangGraph thread access")) {
+        return false;
+      }
+
+      try {
+        await detachLangGraphThread({ threadId });
+      } catch (error) {
+        setStatusNote(error instanceof Error ? error.message : String(error));
+        return false;
+      }
+
+      setLanggraphThreadId(null);
+      setActiveRunId(null);
+      clearPersistedThreadId();
+      clearPersistedRunId();
+      setStatusNote(
+        "This conversation was linked to an invalid LangGraph thread. Send a new message to create a fresh backend session.",
+      );
+      return true;
+    },
+    [detachLangGraphThread],
   );
 
   const langgraphClient = useMemo(() => createLangGraphClient(authToken), [authToken]);
@@ -303,22 +378,40 @@ function AuthenticatedApp() {
         });
       }
     },
-    onFinish() {
+    onFinish(state) {
       const activeThreadId = selectedThreadIdRef.current;
       if (activeThreadId) {
-        void syncAssistantMessages({
-          threadId: activeThreadId,
-          messages: getAssistantMirrorPayload(streamMessagesRef.current),
-        })
-          .then(() => setIdle({ threadId: activeThreadId }))
-          .catch((error) => {
+        const finalStateMessages = extractThreadStateMessages(state);
+        const messages =
+          finalStateMessages.length > 0 ? finalStateMessages : streamMessagesRef.current;
+
+        void (async () => {
+          let syncFailed = false;
+          try {
+            await syncAssistantMessages({
+              threadId: activeThreadId,
+              messages: getAssistantMirrorPayload(messages),
+            });
+          } catch (error) {
+            syncFailed = true;
             setStatusNote(error instanceof Error ? error.message : String(error));
-          });
+          }
+
+          try {
+            await setIdle({ threadId: activeThreadId });
+            if (!syncFailed) {
+              setStatusNote("");
+            }
+          } catch (error) {
+            setStatusNote(error instanceof Error ? error.message : String(error));
+          }
+        })();
+      } else {
+        setStatusNote("");
       }
 
       setActiveRunId(null);
       clearPersistedRunId();
-      setStatusNote("");
     },
     onStop() {
       const activeThreadId = selectedThreadIdRef.current;
@@ -331,17 +424,26 @@ function AuthenticatedApp() {
       clearPersistedRunId();
       setStatusNote("");
     },
-    onError(error) {
+    async onError(error) {
+      const message = error instanceof Error ? error.message : String(error);
       const activeThreadId = selectedThreadIdRef.current;
+      if (await recoverBrokenLangGraphThread(activeThreadId, message)) {
+        if (activeThreadId) {
+          void setIdle({ threadId: activeThreadId }).catch((nextError) => {
+            setStatusNote(nextError instanceof Error ? nextError.message : String(nextError));
+          });
+        }
+        return;
+      }
       if (activeThreadId) {
         void setError({
           threadId: activeThreadId,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage: message,
         }).catch((nextError) => {
           setStatusNote(nextError instanceof Error ? nextError.message : String(nextError));
         });
       }
-      setStatusNote(error instanceof Error ? error.message : String(error));
+      setStatusNote(message);
     },
   });
 
@@ -400,13 +502,7 @@ function AuthenticatedApp() {
     const exists = threads.some((thread) => thread._id === selectedThreadId);
     if (!exists) {
       const fallback = threads[0] ?? null;
-      if (fallback) {
-        selectThread(fallback);
-      } else {
-        setSelectedThreadId(null);
-        setLanggraphThreadId(null);
-        clearPersistedThreadId();
-      }
+      selectThread(fallback);
     }
   }, [selectedThreadId, selectThread, threads]);
 

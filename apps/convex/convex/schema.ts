@@ -16,8 +16,9 @@ export default defineSchema({
     createdAt: v.optional(v.number()),
     updatedAt: v.optional(v.number()),
   })
-    .index("by_tokenIdentifier", ["tokenIdentifier"])
-    .index("by_email", ["email"]),
+    .index("email", ["email"])
+    .index("phone", ["phone"])
+    .index("by_tokenIdentifier", ["tokenIdentifier"]),
   userPreferences: defineTable({
     userId: v.id("users"),
     sidebarWidth: v.number(),
