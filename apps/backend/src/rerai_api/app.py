@@ -84,14 +84,6 @@ def _require_supported_features(payload: StreamRunRequest) -> None:
         )
 
 
-def _normalize_interrupts(value: list[str] | str | None) -> list[str] | str | None:
-    if value is None:
-        return None
-    if isinstance(value, list):
-        return value
-    return [value]
-
-
 def _parse_before_config(
     thread_id: str, before: str | dict[str, Any] | None
 ) -> dict[str, Any] | None:
@@ -356,12 +348,8 @@ def create_app(
         payload_dict["stream_mode"] = parse_stream_modes(
             payload_dict.get("stream_mode")
         )
-        payload_dict["interrupt_before"] = _normalize_interrupts(
-            payload_dict.get("interrupt_before")
-        )
-        payload_dict["interrupt_after"] = _normalize_interrupts(
-            payload_dict.get("interrupt_after")
-        )
+        payload_dict["interrupt_before"] = None
+        payload_dict["interrupt_after"] = None
         if payload_dict.get("multitask_strategy") not in (None, "interrupt"):
             raise HTTPException(
                 status_code=422, detail="Unsupported multitask_strategy for MVP1"

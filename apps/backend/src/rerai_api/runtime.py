@@ -375,7 +375,6 @@ class RunManager:
         payload: dict[str, Any],
         stream_modes: list[str],
     ) -> None:
-        interrupted = False
         await self._emit(run_id, thread_id, "metadata", {"run_id": run_id})
         config = build_runnable_config(thread_id=thread_id, payload=payload)
         input_value = build_graph_input(payload)
@@ -385,21 +384,13 @@ class RunManager:
                 config=config,
                 context=payload.get("context"),
                 stream_mode=graph_stream_modes(stream_modes),
-                interrupt_before=payload.get("interrupt_before"),
-                interrupt_after=payload.get("interrupt_after"),
                 durability=payload.get("durability"),
                 subgraphs=bool(payload.get("stream_subgraphs", False)),
             ):
                 event_name, data = normalize_stream_chunk(chunk)
                 normalized = json_safe(data)
-                if (
-                    event_name == "values"
-                    and isinstance(normalized, dict)
-                    and normalized.get("__interrupt__")
-                ):
-                    interrupted = True
                 await self._emit(run_id, thread_id, event_name, normalized)
-            status = "interrupted" if interrupted else "completed"
+            status = "completed"
             await asyncio.to_thread(
                 self.store.finish_run, run_id=run_id, thread_id=thread_id, status=status
             )

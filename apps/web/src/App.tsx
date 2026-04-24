@@ -44,7 +44,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Composer } from "./components/Composer";
-import { InterruptDialog } from "./components/InterruptDialog";
 import { ReportPanel } from "./components/ReportPanel";
 import { Transcript } from "./components/Transcript";
 import { api } from "./lib/convexApi";
@@ -153,7 +152,6 @@ function AuthenticatedApp() {
   const syncAssistantMessages = useMutation(api.messages.syncAssistantMessages);
   const updatePreferences = useMutation(api.preferences.updateMine);
   const setRunning = useMutation(api.runState.setRunning);
-  const setInterrupted = useMutation(api.runState.setInterrupted);
   const setError = useMutation(api.runState.setError);
   const setIdle = useMutation(api.runState.setIdle);
 
@@ -441,13 +439,25 @@ function AuthenticatedApp() {
     streamMessagesRef.current = streamMessages;
   }, [streamMessages]);
 
+  const startBlankChat = useCallback(() => {
+    setSelectedThreadId(null);
+    selectedThreadIdRef.current = null;
+    setLanggraphThreadId(null);
+    setActiveRunId(null);
+    clearPersistedThreadId();
+    clearPersistedRunId();
+    setStatusNote("");
+    stream.switchThread(null);
+  }, [stream]);
+
   useEffect(() => {
-    if (stream.interrupts.length > 0 && selectedThreadId) {
-      void setInterrupted({ threadId: selectedThreadId }).catch((error) => {
-        setStatusNote(error instanceof Error ? error.message : String(error));
-      });
+    if (stream.interrupts.length > 0) {
+      setStatusNote(
+        "Chat session hit an unexpected pause — started a fresh conversation.",
+      );
+      startBlankChat();
     }
-  }, [selectedThreadId, setInterrupted, stream.interrupts.length]);
+  }, [stream.interrupts.length, startBlankChat]);
 
   const selectThread = useCallback(
     (thread: ConvexThread | null) => {
@@ -550,7 +560,6 @@ function AuthenticatedApp() {
   );
 
   const hasReport = Boolean(report.summary || report.sections.length > 0);
-  const interrupts = stream.interrupts as { id?: string; value?: unknown; when?: string }[];
 
   const handleResizeStart = useCallback(
     (event: React.MouseEvent) => {
@@ -590,17 +599,6 @@ function AuthenticatedApp() {
   const onNewThread = async () => {
     selectThread(null);
   };
-
-  const startBlankChat = useCallback(() => {
-    setSelectedThreadId(null);
-    selectedThreadIdRef.current = null;
-    setLanggraphThreadId(null);
-    setActiveRunId(null);
-    clearPersistedThreadId();
-    clearPersistedRunId();
-    setStatusNote("");
-    stream.switchThread(null);
-  }, [stream]);
 
   const onDeleteThread = async (threadId: string) => {
     await removeThread({ threadId });
@@ -645,13 +643,6 @@ function AuthenticatedApp() {
       { messages: [{ type: "human", content: trimmed }] },
       { streamResumable: true, onDisconnect: "continue" },
     );
-  };
-
-  const onResumeInterrupt = async (resumeValue: unknown) => {
-    await stream.submit(null, {
-      command: { resume: resumeValue },
-      multitaskStrategy: "interrupt",
-    });
   };
 
   const onToggleSidebar = () => {
@@ -731,13 +722,6 @@ function AuthenticatedApp() {
   return (
     <TooltipProvider>
       <div className="flex h-dvh overflow-hidden">
-        <InterruptDialog
-          busy={busy}
-          interrupts={interrupts}
-          onResume={onResumeInterrupt}
-          onDismiss={startBlankChat}
-        />
-
         <div
           ref={sidebarRef}
           className={`relative hidden flex-col border-r bg-sidebar-accent md:flex ${
