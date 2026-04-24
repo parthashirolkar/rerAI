@@ -113,8 +113,40 @@ export function AuthScreen() {
       <section className="relative px-6 pt-32 pb-20 lg:pt-40 lg:pb-28">
         <div className="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-2 lg:gap-16">
           {/* Left Column */}
-          <div className="max-w-xl space-y-8">
-            <div className="space-y-6">
+          <div className="relative max-w-xl space-y-8">
+            
+            {/* Blended Artwork Seamlessly Integrated into Background Layer */}
+            <div className="relative h-56 w-full sm:h-64 lg:h-72 -mt-12 mb-4 group select-none">
+                {/* Base texture: Blueprints floating seamlessly */}
+                <div 
+                  className="absolute -inset-16 opacity-40 mix-blend-multiply dark:opacity-60 dark:mix-blend-screen transition-transform duration-1000 ease-out group-hover:scale-105"
+                  style={{
+                    backgroundImage: 'url(/assets/blueprint_line_art.png)',
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center',
+                    maskImage: 'radial-gradient(ellipse at center, black 20%, transparent 70%)',
+                    WebkitMaskImage: 'radial-gradient(ellipse at center, black 20%, transparent 70%)'
+                  }}
+                />
+
+                {/* Hero subject: 3D Isometric building */}
+                <div 
+                  className="absolute inset-y-0 -inset-x-8 opacity-[0.85] transition-transform duration-1000 ease-out group-hover:scale-105 group-hover:-translate-y-1"
+                  style={{
+                    backgroundImage: 'url(/assets/saas_3d_isometric.png)',
+                    backgroundSize: 'contain',
+                    backgroundRepeat: 'no-repeat',
+                    backgroundPosition: 'center bottom',
+                    maskImage: 'radial-gradient(circle at center, black 50%, transparent 90%)',
+                    WebkitMaskImage: 'radial-gradient(circle at center, black 50%, transparent 90%)'
+                  }}
+                />
+
+                {/* Ambient glow */}
+                <div className="absolute top-1/2 left-1/2 -z-10 size-64 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/10 blur-[80px] transition-opacity duration-1000 group-hover:opacity-100 opacity-60" />
+            </div>
+
+            <div className="space-y-6 relative z-10">
               <h1 className="font-serif text-5xl leading-[1.1] font-semibold tracking-tight text-foreground lg:text-6xl">
                 Permitting intelligence for Pune real estate
               </h1>
