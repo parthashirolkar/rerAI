@@ -515,6 +515,9 @@ function AuthenticatedApp() {
     return null;
   }, [stream.isLoading, streamMessages]);
 
+  const showThinking =
+    stream.isLoading && !liveAssistantMessage && persistedMessages.length > 0;
+
   const displayMessages = useMemo(() => {
     if (!liveAssistantMessage) {
       return persistedMessages;
@@ -666,9 +669,6 @@ function AuthenticatedApp() {
 
   const busy = stream.isLoading || runState?.status === "running";
 
-  const isStaleInterrupted =
-    runState?.status === "interrupted" && stream.interrupts.length === 0;
-
   const sidebarContent = (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between p-4 pb-2">
@@ -700,19 +700,22 @@ function AuthenticatedApp() {
                 }`}
                 onClick={() => selectThread(thread)}
               >
-                <MessageSquare className="size-3.5 shrink-0" />
+                <span className="relative size-3.5 shrink-0">
+                  <MessageSquare className="absolute inset-0 size-3.5 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" />
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="absolute -inset-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onDeleteThread(thread._id);
+                    }}
+                    aria-label="Delete conversation"
+                  >
+                    <X className="size-3" />
+                  </Button>
+                </span>
                 <span className="flex-1 truncate">{thread.title}</span>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  className="opacity-0 group-hover:opacity-100"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void onDeleteThread(thread._id);
-                  }}
-                >
-                  <X className="size-3" />
-                </Button>
               </div>
             ))
           )}
@@ -727,7 +730,7 @@ function AuthenticatedApp() {
 
   return (
     <TooltipProvider>
-      <div className="flex h-full">
+      <div className="flex h-dvh overflow-hidden">
         <InterruptDialog
           busy={busy}
           interrupts={interrupts}
@@ -737,7 +740,7 @@ function AuthenticatedApp() {
 
         <div
           ref={sidebarRef}
-          className={`relative hidden flex-col border-r bg-sidebar md:flex ${
+          className={`relative hidden flex-col border-r bg-sidebar-accent md:flex ${
             sidebarOpen ? "" : "w-0 overflow-hidden"
           }`}
           style={sidebarOpen ? { width: sidebarWidth } : undefined}
@@ -758,7 +761,7 @@ function AuthenticatedApp() {
           </SheetContent>
         </Sheet>
 
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <header className="flex items-center justify-between border-b px-3 py-2">
             <div className="flex items-center gap-2">
               <Tooltip>
@@ -825,11 +828,12 @@ function AuthenticatedApp() {
             </div>
           </header>
 
-          <div className="relative flex min-h-0 flex-1">
-            <div className={`flex flex-1 flex-col ${showReport ? "border-r" : ""}`}>
+          <div className="relative flex min-h-0 flex-1 overflow-hidden">
+            <div className={`flex min-h-0 flex-1 flex-col overflow-hidden ${showReport ? "border-r" : ""}`}>
               <Transcript
                 hasMessages={displayMessages.length > 0}
                 isStreaming={stream.isLoading}
+                showThinking={showThinking}
                 messages={displayMessages}
                 progressDetail={progress.detail}
                 sampleQueries={SAMPLE_QUERIES}
@@ -849,19 +853,6 @@ function AuthenticatedApp() {
               </div>
             ) : null}
           </div>
-
-          {isStaleInterrupted ? (
-            <div className="border-t bg-amber-50 px-4 py-2">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs text-amber-800">
-                  This conversation paused under an older tool-review flow. Start a new chat to continue.
-                </p>
-                <Button variant="outline" size="sm" onClick={startBlankChat}>
-                  Start blank chat
-                </Button>
-              </div>
-            </div>
-          ) : null}
 
           {statusNote ? (
             <div className="border-t bg-destructive/5 px-4 py-2">

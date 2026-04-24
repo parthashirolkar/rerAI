@@ -1,5 +1,5 @@
+import { useEffect, useRef } from "react";
 import { MessageSquare } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownContent } from "./MarkdownContent";
@@ -12,6 +12,7 @@ import {
 type TranscriptProps = {
   hasMessages: boolean;
   isStreaming: boolean;
+  showThinking: boolean;
   messages: unknown[];
   progressDetail: string;
   sampleQueries: string[];
@@ -21,13 +22,22 @@ type TranscriptProps = {
 export function Transcript({
   hasMessages,
   isStreaming,
+  showThinking,
   messages,
   progressDetail,
   sampleQueries,
   onUseSample,
 }: TranscriptProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+    scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" });
+  }, [messages.length, showThinking]);
+
   return (
-    <ScrollArea className="flex-1">
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-3xl px-5 py-6">
         {!hasMessages ? (
           <div className="flex flex-col items-center justify-center py-20">
@@ -92,8 +102,18 @@ export function Transcript({
               </div>
             );
           })}
+
+          {showThinking ? (
+            <div className="flex justify-start">
+              <div className="chat-bubble-assistant flex items-center gap-1 py-4">
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+                <span className="typing-dot" />
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
-    </ScrollArea>
+    </div>
   );
 }
