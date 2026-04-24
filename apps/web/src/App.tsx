@@ -251,49 +251,15 @@ function AuthenticatedApp() {
     setThreadsHydrated(false);
     setSidebarWidth(preferences.sidebarWidth ?? SIDEBAR_DEFAULT);
     setSidebarOpen(preferences.sidebarOpen ?? true);
-
-    const preferredThread =
-      preferences.lastOpenedThreadId === undefined
-        ? null
-        : (threads.find((thread) => thread._id === preferences.lastOpenedThreadId) ?? null);
-    const initialThread = preferredThread ?? threads[0] ?? null;
-
-    if (!initialThread) {
-      setSelectedThreadId(null);
-      selectedThreadIdRef.current = null;
-      setLanggraphThreadId(null);
-      setActiveRunId(null);
-      clearPersistedThreadId();
-      clearPersistedRunId();
-      if (preferences.lastOpenedThreadId !== undefined) {
-        void updatePreferences({ lastOpenedThreadId: null }).catch((error) => {
-          setStatusNote(error instanceof Error ? error.message : String(error));
-        });
-      }
-      setThreadsHydrated(true);
-      return;
-    }
-
-    setSelectedThreadId(initialThread._id);
-    selectedThreadIdRef.current = initialThread._id;
-    setLanggraphThreadId(initialThread.langgraphThreadId ?? null);
+    setSelectedThreadId(null);
+    selectedThreadIdRef.current = null;
+    setLanggraphThreadId(null);
     setActiveRunId(null);
-
-    if (initialThread.langgraphThreadId) {
-      persistThreadId(initialThread.langgraphThreadId);
-    } else {
-      clearPersistedThreadId();
-    }
-
-    if (preferredThread?.langgraphThreadId !== initialThread.langgraphThreadId) {
-      clearPersistedRunId();
-    }
-    if (
-      preferences.lastOpenedThreadId !== undefined &&
-      preferredThread === null &&
-      initialThread._id !== preferences.lastOpenedThreadId
-    ) {
-      void updatePreferences({ lastOpenedThreadId: initialThread._id }).catch((error) => {
+    setLastSubmittedAt(null);
+    clearPersistedThreadId();
+    clearPersistedRunId();
+    if (preferences.lastOpenedThreadId !== undefined) {
+      void updatePreferences({ lastOpenedThreadId: null }).catch((error) => {
         setStatusNote(error instanceof Error ? error.message : String(error));
       });
     }
@@ -501,8 +467,7 @@ function AuthenticatedApp() {
     }
     const exists = threads.some((thread) => thread._id === selectedThreadId);
     if (!exists) {
-      const fallback = threads[0] ?? null;
-      selectThread(fallback);
+      selectThread(null);
     }
   }, [selectedThreadId, selectThread, threads]);
 
@@ -609,26 +574,13 @@ function AuthenticatedApp() {
   );
 
   const onNewThread = async () => {
-    const created = (await createThread({})) as ConvexThread | null;
-    if (!created) {
-      return;
-    }
-    selectThread(created);
+    selectThread(null);
   };
 
   const onDeleteThread = async (threadId: string) => {
     await removeThread({ threadId });
     if (threadId === selectedThreadId) {
-      stream.switchThread(null);
-      setSelectedThreadId(null);
-      selectedThreadIdRef.current = null;
-      setLanggraphThreadId(null);
-      setActiveRunId(null);
-      setLastSubmittedAt(null);
-      setShowReport(false);
-      clearPersistedThreadId();
-      clearPersistedRunId();
-      persistPreferenceSnapshot({ lastOpenedThreadId: null });
+      selectThread(null);
     }
   };
 
