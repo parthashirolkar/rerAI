@@ -1,0 +1,26 @@
+{
+    "name": "rerAI",
+    "private": true,
+    "packageManager": "bun@1.2.22",
+    "workspaces": [
+        "apps/*"
+    ],
+    "scripts": {
+        "backend:dev": "cd apps/backend && uv run uvicorn app:app --reload --host 127.0.0.1 --port 8123",
+        "backend:build": "docker build -t rerai-backend ./apps/backend",
+        "backend:test": "cd apps/backend && OPENROUTER_API_KEY=dummy uv run pytest -m \"not live\"",
+        "backend:lint": "cd apps/backend && OPENROUTER_API_KEY=dummy uv run ruff check .",
+        "web:dev": "cd apps/web && bun run dev",
+        "web:build": "cd apps/web && bun run build",
+        "convex:dev": "cd apps/convex && bun run dev",
+        "convex:deploy": "cd apps/convex && bun run deploy",
+        "lint": "bun run backend:lint",
+        "dev": "concurrently -k -n backend,web,convex -c \"blue.bold,green.bold,magenta.bold\" \"bun run backend:dev\" \"bun run web:dev\" \"bun run convex:dev\"",
+        "test": "bun run backend:test && bun run web:build",
+        "build": "bun run web:build"
+    },
+    "devDependencies": {
+        "concurrently": "^9.2.1",
+        "happy-dom": "^20.9.0"
+    }
+}

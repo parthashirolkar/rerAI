@@ -1,0 +1,7 @@
+
+.env.local
+.agents/
+.claude/
+CLAUDE.md
+skills-lock.json
+convex/_generated/ai/ai-files.state.json

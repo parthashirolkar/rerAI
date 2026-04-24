@@ -4,20 +4,27 @@ AI agent guidelines for the rerAI codebase — an autonomous permitting assistan
 
 ## Build & Development Commands
 
+**Standing instruction:** Do not run build commands unless the user explicitly asks for that specific build command in the current turn.
+
 ```bash
-# Setup (using uv - the project package manager)
-uv sync                    # Install all dependencies + dev dependencies
-uv sync --no-dev          # Install production dependencies only
+# Root workspace
+bun install
+bun run dev
+bun run test
+bun run lint
+
+# Backend
+cd apps/backend && uv sync
+cd apps/backend && uv run uvicorn app:app --reload --host 127.0.0.1 --port 8123
+docker build -t rerai-backend ./apps/backend
 
 # Linting & Formatting (Ruff)
-uv run ruff check .        # Check all files for lint errors
-uv run ruff check --fix .  # Auto-fix lint errors
-uv run ruff format .       # Format all files
+cd apps/backend && uv run ruff check .
+cd apps/backend && uv run ruff check --fix .
+cd apps/backend && uv run ruff format .
 
 # Running Tests
-uv run pytest                              # All tests (including live API tests)
-uv run pytest -m "not live"                # Unit tests only (no network)
-uv run pytest tests/test_integration.py -m live  # Integration chain tests only
+cd apps/backend && OPENROUTER_API_KEY=dummy uv run pytest -m "not live"
 ```
 
 ## Code Style Guidelines
@@ -30,7 +37,7 @@ uv run pytest tests/test_integration.py -m live  # Integration chain tests only
 
 ## Skill Format
 
-Skills are markdown files in `skills/<name>/SKILL.md` with frontmatter:
+Skills are markdown files in `apps/backend/src/rerai_agent/skills/<name>/SKILL.md` with frontmatter:
 
 ```yaml
 ---
@@ -46,6 +53,12 @@ trigger: When to activate this skill
 - Use the Bash tool to run inline Python directly: `uv run python -c "..."`
 - Invoke tools via their async interface: `asyncio.run(tool.ainvoke({...}))`
 - Check output length and content to verify fixes work as expected.
+
+## Repo Layout
+
+- `apps/backend`: Python agent runtime and FastAPI backend
+- `apps/web`: React frontend
+- `apps/convex`: Convex app
 
 ## Key Dependencies
 

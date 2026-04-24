@@ -1,124 +1,212 @@
-# rerAI — Autonomous Permitting Assistant
+# rerAI
 
-An AI-powered permitting agent for Pune, Maharashtra that checks RERA compliance, queries building regulations via RAG, and produces structured permit feasibility reports.
-
-> Think "Claude Code for land" — but for Indian municipal permitting.
-
-## What it does
-
-Given a plot query (address, survey number, or coordinates), rerAI:
-
-1. **Plans** the assessment via an internal task list
-2. **Delegates** to specialized subagents for parallel data gathering
-3. **Synthesizes** findings into a structured permit feasibility report
-
-### Current data pillars
-
-| Pillar | Status | Subagent | Data Source |
-|---|---|---|---|
-| RERA Compliance | Phase 1 | `rera-analyst` | MahaRERA portal scraping |
-| Building Regulations | Phase 1 | `regulatory-checker` | UDCPR 2025 PDF (576 pages, ChromaDB RAG) |
-| GIS Spatial | Phase 2 | `gis-analyst` | Bhuvan WMS, PMC Open Data, OpenStreetMap |
-| Land Records | Phase 2 | `title-verifier` | Mahabhulekh 7/12 extracts via Playwright |
-| Environmental | Phase 3 | `environmental-checker` | PARIVESH, eco-sensitive zone boundaries |
+rerAI is an autonomous permitting assistant for Pune, Maharashtra. This repo is a monorepo with a React frontend, a Convex app for auth and app state, and a Python backend that runs the rerAI graph behind a FastAPI service.
 
 ## Architecture
 
-```
-User Query
-    │
-    ▼
-┌─────────────────────────────────┐
-│   Orchestrator (deepagents)     │
-│   qwen/qwen3.6-plus:free        │
-│   via OpenRouter                 │
-├─────────────────────────────────┤
-│  ┌──────────┐  ┌──────────────┐ │
-│  │ rera-    │  │ regulatory-  │ │
-│  │ analyst  │  │ checker      │ │
-│  │ (nemotron│  │ (nemotron)   │ │
-│  └──────────┘  └──────────────┘ │
-└─────────────────────────────────┘
-    │
-    ▼
-Permit Feasibility Report
-```
+The request path is:
 
-Built on [deepagents](https://github.com/langchain-ai/deepagents) — LangChain's agent orchestration framework over LangGraph. Each subagent runs with context isolation: heavy scraping/vector search stays in the subagent, only synthesized results return to the orchestrator.
+1. the rerAI frontend authenticates the user
+2. the frontend calls the Convex HTTP proxy at `/langgraph`
+3. Convex validates the user and enforces thread ownership
+4. Convex forwards the request to the internal backend service and presents an internal shared-secret header
+5. the FastAPI backend runs the graph and returns a LangGraph-compatible thread/run response
 
-## Setup
+Important implication:
+- the backend is not the public auth boundary
+- the Convex proxy is the auth boundary
+- the backend should stay behind private networking or a trusted proxy
+- the backend also requires a Convex-presented shared secret on every route except `/ok`
+
+## Apps
+
+- `apps/backend`: Python backend for the rerAI graph runtime, managed with `uv`
+- `apps/web`: React + TypeScript + Vite frontend
+- `apps/convex`: Convex app for auth, thread ownership, message persistence, and the backend proxy
+
+## Backend shape
+
+The backend keeps the existing `rerai_agent.graph` graph and exposes the subset of the LangGraph thread/run API that the current app already uses.
+
+Current MVP backend behavior:
+- FastAPI service, not `langgraph dev`
+- LangGraph-compatible endpoints for assistants, threads, state/history, and streaming runs
+- LangGraph checkpoint/store persistence via `DATABASE_URI`
+- rerAI-owned metadata tables for threads, runs, and resumable SSE replay
+- single-process in-memory streaming fanout for MVP1
+
+Current limitations:
+- no Redis-backed multi-replica streaming yet
+- no full Agent Server parity
+- backend-side auth is still trust-based behind Convex/private networking
+
+## Local development
 
 ### Prerequisites
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) package manager
-- [Ollama](https://ollama.ai) running locally with `embeddinggemma:latest` pulled
-- OpenRouter API key
+- Bun
+- Python 3.13
+- `uv`
 
 ### Install
 
-```bash
-git clone https://github.com/parthashirolkar/rerAI.git
-cd rerAI
-uv sync
-```
-
-### Configure
-
-Create a `.env` file (already gitignored):
-
-```
-OPENROUTER_API_KEY=sk-or-v1-...
-OLLAMA_BASE_URL=http://localhost:11434/v1
-```
-
-### Pull embedding model
+Workspace dependencies:
 
 ```bash
-ollama pull embeddinggemma:latest
+bun install
 ```
 
-## Usage
+Backend dependencies:
 
 ```bash
-uv run python main.py
+cd apps/backend && /home/partha/.local/bin/uv sync
 ```
 
-This will:
-1. Ingest the UDCPR PDF into ChromaDB (first run only, ~1625 chunks)
-2. Start an interactive REPL
+### Environment
 
-Example queries:
-- "What are the FSI limits for a residential plot in Pune?"
-- "Search for RERA projects in Pune district"
-- "Check permit feasibility for survey number 123 in Haveli taluka"
+Copy the backend env template to the repo root:
 
-## Project Structure
-
-```
-rerAI/
-├── main.py                    # Orchestrator REPL
-├── tools/
-│   ├── config.py              # LLM + embedding config
-│   ├── rera_tools.py          # MahaRERA search/lookup tools
-│   └── regulatory_tools.py    # UDCPR RAG query tool
-├── subagents/
-│   └── definitions.py         # Subagent configurations
-├── memory/
-│   └── AGENT_KNOWLEDGE.md     # Pune context (loaded at runtime)
-├── skills/
-│   └── permit-feasibility/    # Permit assessment skill
-├── data/
-│   ├── pdfs/                  # UDCPR PDFs (gitignored)
-│   └── chroma_db/             # Vector store (gitignored)
-├── ROADMAP.md                 # Phase 2-3 implementation spec
-└── pyproject.toml
+```bash
+cp apps/backend/.env.example .env
 ```
 
-## Roadmap
+Minimum backend variables:
 
-See [ROADMAP.md](./ROADMAP.md) for detailed Phase 2 (GIS + Land Records) and Phase 3 (Environmental + Synthesis) specifications.
+- `DATABASE_URI`
+- `OPENROUTER_API_KEY`
+- `CHROMA_API_KEY`
+- `CHROMA_TENANT`
+- `CHROMA_DATABASE`
 
-## License
+App-level variables also matter:
 
-MIT
+- Convex needs `LANGGRAPH_INTERNAL_API_URL` in deployed environments so it can reach the backend
+- Convex and the backend both need the same `LANGGRAPH_INTERNAL_SHARED_SECRET`
+- the web app needs the Convex site URL envs already used in `apps/web`
+
+### Run everything
+
+```bash
+bun run dev
+```
+
+This starts:
+
+- backend: `uv run uvicorn app:app --reload --host 127.0.0.1 --port 8123`
+- web: Vite in `apps/web`
+- convex: `convex dev` in `apps/convex`
+
+You can also run them separately:
+
+```bash
+bun run backend:dev
+bun run web:dev
+bun run convex:dev
+```
+
+## Common commands
+
+Backend dev server:
+
+```bash
+bun run backend:dev
+```
+
+Backend tests:
+
+```bash
+bun run backend:test
+```
+
+Backend lint:
+
+```bash
+bun run backend:lint
+```
+
+Frontend build:
+
+```bash
+bun run web:build
+```
+
+## Persistence
+
+`DATABASE_URI` is the main backend persistence setting.
+
+It is used for:
+
+- LangGraph checkpoint/store persistence
+- rerAI thread metadata
+- rerAI run metadata
+- persisted SSE replay events
+
+Supported values:
+
+- local SQLite, for example `sqlite:///tmp/rerai-backend.db`
+- Postgres, including Supabase
+
+If `LANGGRAPH_SETUP_DB=true`, startup will create both LangGraph tables and rerAI metadata tables.
+
+## Deployment
+
+### Backend
+
+Deploy `apps/backend` as a dedicated Railway service using its Dockerfile.
+
+Expected production pattern:
+
+- backend is internal/private
+- Convex calls it through `LANGGRAPH_INTERNAL_API_URL` and `LANGGRAPH_INTERNAL_SHARED_SECRET`
+- frontend does not call the backend directly
+
+### Web
+
+Deploy `apps/web` to a static host. The recommended default is Cloudflare Pages.
+
+Production web env vars:
+
+- `VITE_CONVEX_URL`
+- `VITE_CONVEX_SITE_URL`
+
+The frontend does not need Google OAuth secrets or backend secrets. It only needs the public Convex URLs.
+
+### Google OAuth
+
+Google OAuth is handled by Convex Auth, not by the frontend host.
+
+Set these on the Convex deployment:
+
+- `AUTH_GOOGLE_ID`
+- `AUTH_GOOGLE_SECRET`
+
+The Google OAuth redirect URI must point at the Convex Site domain:
+
+- `https://<your-convex-site>.convex.site/api/auth/callback/google`
+
+### Convex
+
+Deploy `apps/convex` with:
+
+```bash
+bun run convex:deploy
+```
+
+Production Convex env vars include:
+
+- `LANGGRAPH_INTERNAL_API_URL`
+- `LANGGRAPH_INTERNAL_SHARED_SECRET`
+- `CLIENT_ORIGINS`
+- `AUTH_GOOGLE_ID`
+- `AUTH_GOOGLE_SECRET`
+
+## Repo notes
+
+- The backend is managed by `uv`, not by Bun workspaces.
+- The frontend and Convex layers are intentionally unchanged around the `/langgraph` proxy contract.
+- The backend preserves the existing LangGraph-compatible API surface needed by the app, but it no longer depends on hosted Agent Server infrastructure.
+
+## More detail
+
+- backend runtime and deployment details: [apps/backend/README.md](/home/partha/git-repos/rerAI/apps/backend/README.md)
+- backend proxy/auth behavior: [apps/convex/convex/langgraphProxy.ts](/home/partha/git-repos/rerAI/apps/convex/convex/langgraphProxy.ts)

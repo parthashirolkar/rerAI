@@ -31,6 +31,15 @@
                 "https://mcp.notion.com/mcp"
             ],
             "type": "local"
+        },
+        "Railway": {
+            "type": "local",
+            "command": ["npx", "-y", "@railway/mcp-server"]
+        },
+        "supabase": {
+            "type": "remote",
+            "url": "https://mcp.supabase.com/mcp?project_ref=mmgatdxohaynyaigicen&features=docs%2Cdatabase%2Cdebugging%2Cdevelopment",
+            "enabled": true
         }
     }
 }
