@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { AlertTriangle, Check, FileWarning, PencilLine, X } from "lucide-react"
+import { AlertTriangle, Check, FileWarning, MessageSquarePlus, PencilLine, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -57,19 +57,10 @@ type InterruptDialogProps = {
   interrupts: InterruptLike[]
   busy: boolean
   onResume: (resumeValue: unknown) => Promise<void>
+  onDismiss?: () => void
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function isHitlRequest(value: unknown): value is HitlRequest {
-  return (
-    isRecord(value) &&
-    Array.isArray(value.actionRequests) &&
-    Array.isArray(value.reviewConfigs)
-  )
-}
+import { isHitlRequest, isRecord } from "./interruptHelpers"
 
 function prettyJson(value: unknown) {
   return JSON.stringify(value, null, 2)
@@ -83,6 +74,7 @@ export function InterruptDialog({
   interrupts,
   busy,
   onResume,
+  onDismiss,
 }: InterruptDialogProps) {
   const open = interrupts.length > 0
   const [actionDrafts, setActionDrafts] = useState<Record<string, ActionDraft[]>>({})
@@ -182,11 +174,9 @@ export function InterruptDialog({
   }
 
   return (
-    <Dialog open={open}>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onDismiss?.() }}>
       <DialogContent
-        showCloseButton={false}
-        onEscapeKeyDown={(event) => event.preventDefault()}
-        onInteractOutside={(event) => event.preventDefault()}
+        showCloseButton={true}
         className="max-h-[90vh] p-0"
       >
         <DialogHeader className="border-b px-6 pt-6 pb-4">
@@ -245,7 +235,7 @@ export function InterruptDialog({
           </div>
         </ScrollArea>
 
-        <DialogFooter className="border-t px-6 py-4">
+        <DialogFooter className="border-t px-6 py-4 gap-2">
           {submitError ? (
             <p className="mr-auto text-sm text-destructive">{submitError}</p>
           ) : (
@@ -253,6 +243,12 @@ export function InterruptDialog({
               Approve can resume immediately for a single action. Use the footer button after edit or multi-action review.
             </p>
           )}
+          {onDismiss ? (
+            <Button variant="outline" onClick={onDismiss} disabled={busy} className="gap-1.5">
+              <MessageSquarePlus className="size-3.5" />
+              Start blank chat
+            </Button>
+          ) : null}
           <Button onClick={() => void onSubmit()} disabled={busy}>
             {busy ? "Resuming..." : "Submit decisions"}
           </Button>
@@ -273,9 +269,9 @@ function HitlInterruptSection({
   onImmediateApprove: () => void
   onDraftChange: (actionIndex: number, nextDraft: ActionDraft) => void
 }) {
-  const request = interrupt.value as HitlRequest
-  const actions = request.actionRequests ?? []
-  const reviewConfigs = request.reviewConfigs ?? []
+  const request = isHitlRequest(interrupt.value) ? interrupt.value : {}
+  const actions = Array.isArray(request.actionRequests) ? request.actionRequests : []
+  const reviewConfigs = Array.isArray(request.reviewConfigs) ? request.reviewConfigs : []
 
   return (
     <section className="space-y-4 rounded-xl border bg-card p-4">

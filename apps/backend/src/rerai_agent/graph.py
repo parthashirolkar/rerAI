@@ -289,4 +289,4 @@ async def build_persisted_graph_async(
     )
 
 
-graph = build_persisted_graph(interrupt_on={t.name: True for t in ALL_TOOLS})
+graph = build_persisted_graph()

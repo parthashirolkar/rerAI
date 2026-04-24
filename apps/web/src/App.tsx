@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 
 import { AuthScreen } from "@/components/AuthScreen";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -113,6 +114,8 @@ function getAssistantMirrorPayload(messages: unknown[]) {
 }
 
 export default function App() {
+  const [resetKey, setResetKey] = useState(0);
+
   return (
     <>
       <AuthLoading>
@@ -122,7 +125,15 @@ export default function App() {
         <AuthScreen />
       </Unauthenticated>
       <Authenticated>
-        <AuthenticatedApp />
+        <ErrorBoundary
+          onReset={() => {
+            clearPersistedThreadId();
+            clearPersistedRunId();
+            setResetKey((k) => k + 1);
+          }}
+        >
+          <AuthenticatedApp key={resetKey} />
+        </ErrorBoundary>
       </Authenticated>
     </>
   );
@@ -577,6 +588,17 @@ function AuthenticatedApp() {
     selectThread(null);
   };
 
+  const startBlankChat = useCallback(() => {
+    setSelectedThreadId(null);
+    selectedThreadIdRef.current = null;
+    setLanggraphThreadId(null);
+    setActiveRunId(null);
+    clearPersistedThreadId();
+    clearPersistedRunId();
+    setStatusNote("");
+    stream.switchThread(null);
+  }, [stream]);
+
   const onDeleteThread = async (threadId: string) => {
     await removeThread({ threadId });
     if (threadId === selectedThreadId) {
@@ -644,6 +666,9 @@ function AuthenticatedApp() {
 
   const busy = stream.isLoading || runState?.status === "running";
 
+  const isStaleInterrupted =
+    runState?.status === "interrupted" && stream.interrupts.length === 0;
+
   const sidebarContent = (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between p-4 pb-2">
@@ -707,6 +732,7 @@ function AuthenticatedApp() {
           busy={busy}
           interrupts={interrupts}
           onResume={onResumeInterrupt}
+          onDismiss={startBlankChat}
         />
 
         <div
@@ -823,6 +849,19 @@ function AuthenticatedApp() {
               </div>
             ) : null}
           </div>
+
+          {isStaleInterrupted ? (
+            <div className="border-t bg-amber-50 px-4 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-amber-800">
+                  This conversation paused under an older tool-review flow. Start a new chat to continue.
+                </p>
+                <Button variant="outline" size="sm" onClick={startBlankChat}>
+                  Start blank chat
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           {statusNote ? (
             <div className="border-t bg-destructive/5 px-4 py-2">

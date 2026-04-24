@@ -412,3 +412,28 @@ def test_history_without_checkpointer_returns_503(tmp_path: Path):
         history = test_client.post(f"/threads/{thread_id}/history", json={"limit": 5})
         assert history.status_code == 503
         assert "persistence is disabled" in history.json()["detail"]
+
+
+def test_default_graph_has_no_hitl_interrupts(monkeypatch):
+    import rerai_agent.graph as graph_module
+
+    calls = []
+
+    def fake_create_deep_agent(*, interrupt_on=None, **kwargs):
+        calls.append(interrupt_on)
+        return object()
+
+    monkeypatch.setattr(graph_module, "create_deep_agent", fake_create_deep_agent)
+    graph_module.build_graph()
+    assert calls == [None]
+
+
+def test_interrupt_shaped_stream_event_serializes_without_error():
+    from rerai_api.runtime import normalize_stream_chunk, json_safe
+
+    chunk = {"__interrupt__": [{"value": {"action": "test"}}]}
+    event, data = normalize_stream_chunk(chunk)
+    assert event == "values"
+    serialized = json_safe(data)
+    assert isinstance(serialized, dict)
+    assert "__interrupt__" in serialized

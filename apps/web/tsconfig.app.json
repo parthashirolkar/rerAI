@@ -18,5 +18,6 @@
       "@convex-generated/*": ["../convex/convex/_generated/*"]
     }
   },
-  "include": ["src", "../convex/convex/_generated/**/*.d.ts"]
+  "include": ["src", "../convex/convex/_generated/**/*.d.ts"],
+  "exclude": ["**/*.test.ts", "**/*.test.tsx"]
 }
