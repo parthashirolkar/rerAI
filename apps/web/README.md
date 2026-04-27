@@ -1,6 +1,6 @@
 # rerAI web app
 
-This app is a Vite-built React SPA. It talks to Convex for authentication and app data, and Convex proxies LangGraph-compatible requests to the Railway backend.
+This app is a Vite-built React SPA. It talks to Convex for authentication and app data, and calls the FastAPI backend directly for LangGraph-compatible streaming.
 
 ## Local Development
 
@@ -12,7 +12,7 @@ bun run dev
 Required frontend env vars:
 
 - `VITE_CONVEX_URL`
-- `VITE_CONVEX_SITE_URL`
+- `VITE_BACKEND_URL`
 
 See [apps/web/.env.example](/home/partha/git-repos/rerAI/apps/web/.env.example).
 
@@ -29,15 +29,14 @@ Recommended Cloudflare Pages settings:
 Production env vars:
 
 - `VITE_CONVEX_URL=https://<your-convex-deployment>.convex.cloud`
-- `VITE_CONVEX_SITE_URL=https://<your-convex-deployment>.convex.site`
+- `VITE_BACKEND_URL=https://<your-backend-host>`
 
 This frontend does not need:
 
 - `AUTH_GOOGLE_ID`
 - `AUTH_GOOGLE_SECRET`
-- `LANGGRAPH_INTERNAL_SHARED_SECRET`
 
-Those belong to the Convex deployment, not the browser app.
+Those belong to the Convex or backend deployment, not the browser app.
 
 ## SPA Routing
 

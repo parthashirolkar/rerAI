@@ -15,6 +15,7 @@ dependencies = [
     "cryptography>=44.0.0",
     "deepagents==0.4.12",
     "fastapi>=0.115.0",
+    "httpx>=0.28.1",
     "langgraph-checkpoint-postgres>=2.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
     "langchain-chroma>=0.2.0",

@@ -9,25 +9,19 @@ function trimTrailingSlash(value: string) {
   return value.replace(/\/$/, "");
 }
 
-function resolveConvexSiteUrl() {
-  const explicitSiteUrl = import.meta.env.VITE_CONVEX_SITE_URL?.trim();
-  if (explicitSiteUrl) {
-    return trimTrailingSlash(explicitSiteUrl);
+function resolveBackendUrl() {
+  const backendUrl = import.meta.env.VITE_BACKEND_URL?.trim();
+  if (!backendUrl) {
+    throw new Error("Missing VITE_BACKEND_URL");
   }
-
-  const convexUrl = import.meta.env.VITE_CONVEX_URL?.trim();
-  if (convexUrl?.includes(".convex.cloud")) {
-    return trimTrailingSlash(convexUrl.replace(".convex.cloud", ".convex.site"));
-  }
-
-  throw new Error("Missing VITE_CONVEX_SITE_URL");
+  return trimTrailingSlash(backendUrl);
 }
 
-const PROXY_API_URL = `${resolveConvexSiteUrl()}/langgraph`;
+const API_URL = resolveBackendUrl();
 
 export function createLangGraphClient(authToken: string | null) {
   return new Client({
-    apiUrl: PROXY_API_URL,
+    apiUrl: API_URL,
     callerOptions: {
       fetch: (input: string | URL | globalThis.Request, init?: RequestInit) => {
         const headers = new Headers(init?.headers);

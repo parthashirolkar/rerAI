@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.types import StateSnapshot
 
 from rerai_api.app import create_app
+from rerai_api.convex import ConvexUser
 from rerai_api.db import MetadataStore
 from rerai_api.runtime import (
     BackendRuntime,
@@ -127,6 +128,18 @@ class StubMetadataStore:
         self.setup_calls += 1
 
 
+class FakeConvexClient:
+    async def get_viewer(self, token: str):
+        if token == "test-token":
+            return ConvexUser(user_id="test-user", token_identifier="token:test")
+        if token == "other-token":
+            return ConvexUser(user_id="other-user", token_identifier="token:other")
+        return None
+
+    async def owns_langgraph_thread(self, token: str, thread_id: str) -> bool:
+        return False
+
+
 @pytest.fixture
 def client(tmp_path: Path):
     database_uri = f"sqlite:///{tmp_path / 'rerai-test.db'}"
@@ -135,20 +148,20 @@ def client(tmp_path: Path):
         graph=FakeGraph(),
         metadata_store=MetadataStore(database_uri),
     )
-    app = create_app(runtime, internal_secret="test-secret")
+    app = create_app(runtime, convex_client=FakeConvexClient())
     with TestClient(app) as test_client:
-        test_client.headers.update({"X-RerAI-Internal-Secret": "test-secret"})
+        test_client.headers.update({"Authorization": "Bearer test-token"})
         yield test_client
 
 
-def test_requires_internal_secret(tmp_path: Path):
+def test_requires_bearer_token(tmp_path: Path):
     database_uri = f"sqlite:///{tmp_path / 'rerai-test-auth.db'}"
     runtime = BackendRuntime(
         database_uri,
         graph=FakeGraph(),
         metadata_store=MetadataStore(database_uri),
     )
-    app = create_app(runtime, internal_secret="test-secret")
+    app = create_app(runtime, convex_client=FakeConvexClient())
     with TestClient(app) as test_client:
         ok = test_client.get("/ok")
         assert ok.status_code == 200
@@ -158,7 +171,7 @@ def test_requires_internal_secret(tmp_path: Path):
 
         allowed = test_client.get(
             "/info",
-            headers={"X-RerAI-Internal-Secret": "test-secret"},
+            headers={"Authorization": "Bearer test-token"},
         )
         assert allowed.status_code == 200
 
@@ -229,6 +242,18 @@ def test_state_and_history(client: TestClient):
     assert history.json()[0]["checkpoint"]["checkpoint_id"] == "cp-1"
 
 
+def test_thread_access_rejects_different_user(client: TestClient):
+    created = client.post("/threads", json={})
+    thread_id = created.json()["thread_id"]
+
+    response = client.get(
+        f"/threads/{thread_id}/state",
+        headers={"Authorization": "Bearer other-token"},
+    )
+
+    assert response.status_code == 403
+
+
 def test_stream_protocol_and_reconnect(client: TestClient):
     created = client.post("/threads", json={})
     thread_id = created.json()["thread_id"]
@@ -271,9 +296,9 @@ def test_stream_serializes_real_langchain_messages(tmp_path: Path):
         graph=LangChainMessageGraph(),
         metadata_store=MetadataStore(database_uri),
     )
-    app = create_app(runtime, internal_secret="test-secret")
+    app = create_app(runtime, convex_client=FakeConvexClient())
     with TestClient(app) as test_client:
-        test_client.headers.update({"X-RerAI-Internal-Secret": "test-secret"})
+        test_client.headers.update({"Authorization": "Bearer test-token"})
         created = test_client.post("/threads", json={})
         thread_id = created.json()["thread_id"]
 
@@ -304,9 +329,9 @@ def test_stream_accepts_sdk_messages_tuple_mode(tmp_path: Path):
         graph=graph,
         metadata_store=MetadataStore(database_uri),
     )
-    app = create_app(runtime, internal_secret="test-secret")
+    app = create_app(runtime, convex_client=FakeConvexClient())
     with TestClient(app) as test_client:
-        test_client.headers.update({"X-RerAI-Internal-Secret": "test-secret"})
+        test_client.headers.update({"Authorization": "Bearer test-token"})
         created = test_client.post("/threads", json={})
         thread_id = created.json()["thread_id"]
 
@@ -383,10 +408,10 @@ def test_state_without_checkpointer_returns_503(tmp_path: Path):
         graph=NoCheckpointerGraph(),
         metadata_store=MetadataStore(database_uri),
     )
-    app = create_app(runtime, internal_secret="test-secret")
+    app = create_app(runtime, convex_client=FakeConvexClient())
 
     with TestClient(app) as test_client:
-        test_client.headers.update({"X-RerAI-Internal-Secret": "test-secret"})
+        test_client.headers.update({"Authorization": "Bearer test-token"})
         created = test_client.post("/threads", json={})
         thread_id = created.json()["thread_id"]
 
@@ -402,10 +427,10 @@ def test_history_without_checkpointer_returns_503(tmp_path: Path):
         graph=NoCheckpointerGraph(),
         metadata_store=MetadataStore(database_uri),
     )
-    app = create_app(runtime, internal_secret="test-secret")
+    app = create_app(runtime, convex_client=FakeConvexClient())
 
     with TestClient(app) as test_client:
-        test_client.headers.update({"X-RerAI-Internal-Secret": "test-secret"})
+        test_client.headers.update({"Authorization": "Bearer test-token"})
         created = test_client.post("/threads", json={})
         thread_id = created.json()["thread_id"]
 
