@@ -7,22 +7,20 @@ rerAI is an autonomous permitting assistant for Pune, Maharashtra. This repo is 
 The request path is:
 
 1. the rerAI frontend authenticates the user
-2. the frontend calls the Convex HTTP proxy at `/langgraph`
-3. Convex validates the user and enforces thread ownership
-4. Convex forwards the request to the internal backend service and presents an internal shared-secret header
-5. the FastAPI backend runs the graph and returns a LangGraph-compatible thread/run response
+2. the frontend calls the FastAPI backend directly for LangGraph-compatible thread/run traffic
+3. the backend validates the Convex bearer token and checks thread ownership through Convex
+4. the FastAPI backend runs the graph and returns a LangGraph-compatible SSE response
 
 Important implication:
-- the backend is not the public auth boundary
-- the Convex proxy is the auth boundary
-- the backend should stay behind private networking or a trusted proxy
-- the backend also requires a Convex-presented shared secret on every route except `/ok`
+- the backend is the public agent API boundary
+- Convex remains the identity and app-data source
+- the backend requires `Authorization: Bearer <Convex auth token>` on every route except `/ok`
 
 ## Apps
 
 - `apps/backend`: Python backend for the rerAI graph runtime, managed with `uv`
 - `apps/web`: React + TypeScript + Vite frontend
-- `apps/convex`: Convex app for auth, thread ownership, message persistence, and the backend proxy
+- `apps/convex`: Convex app for auth, thread ownership, message persistence, and backend ownership checks
 
 ## Backend shape
 
@@ -80,9 +78,9 @@ Minimum backend variables:
 
 App-level variables also matter:
 
-- Convex needs `LANGGRAPH_INTERNAL_API_URL` in deployed environments so it can reach the backend
-- Convex and the backend both need the same `LANGGRAPH_INTERNAL_SHARED_SECRET`
-- the web app needs the Convex site URL envs already used in `apps/web`
+- the backend needs `CONVEX_URL` so it can validate users and thread ownership through Convex
+- the backend needs `CLIENT_ORIGINS` for CORS
+- the web app needs `VITE_CONVEX_URL` and `VITE_BACKEND_URL`
 
 ### Run everything
 
@@ -156,9 +154,9 @@ Deploy `apps/backend` as a dedicated Railway service using its Dockerfile.
 
 Expected production pattern:
 
-- backend is internal/private
-- Convex calls it through `LANGGRAPH_INTERNAL_API_URL` and `LANGGRAPH_INTERNAL_SHARED_SECRET`
-- frontend does not call the backend directly
+- frontend calls the backend directly for LangGraph/SSE traffic
+- backend validates Convex bearer tokens and checks thread ownership through Convex
+- Convex remains the identity and app-data service
 
 ### Web
 
@@ -167,7 +165,7 @@ Deploy `apps/web` to a static host. The recommended default is Cloudflare Pages.
 Production web env vars:
 
 - `VITE_CONVEX_URL`
-- `VITE_CONVEX_SITE_URL`
+- `VITE_BACKEND_URL`
 
 The frontend does not need Google OAuth secrets or backend secrets. It only needs the public Convex URLs.
 
@@ -194,19 +192,16 @@ bun run convex:deploy
 
 Production Convex env vars include:
 
-- `LANGGRAPH_INTERNAL_API_URL`
-- `LANGGRAPH_INTERNAL_SHARED_SECRET`
-- `CLIENT_ORIGINS`
 - `AUTH_GOOGLE_ID`
 - `AUTH_GOOGLE_SECRET`
 
 ## Repo notes
 
 - The backend is managed by `uv`, not by Bun workspaces.
-- The frontend and Convex layers are intentionally unchanged around the `/langgraph` proxy contract.
+- The frontend calls the backend directly for LangGraph-compatible traffic.
 - The backend preserves the existing LangGraph-compatible API surface needed by the app, but it no longer depends on hosted Agent Server infrastructure.
 
 ## More detail
 
 - backend runtime and deployment details: [apps/backend/README.md](/home/partha/git-repos/rerAI/apps/backend/README.md)
-- backend proxy/auth behavior: [apps/convex/convex/langgraphProxy.ts](/home/partha/git-repos/rerAI/apps/convex/convex/langgraphProxy.ts)
+- backend-facing Convex auth/thread checks: [apps/convex/convex/backend.ts](/home/partha/git-repos/rerAI/apps/convex/convex/backend.ts)

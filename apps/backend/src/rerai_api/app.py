@@ -7,10 +7,14 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from rerai_agent.env import load_project_env
 
+from .auth import AuthContext, authenticate_request, require_thread_owner
+from .convex import ConvexAuthClient, ConvexHttpClient
 from .runtime import (
     BackendRuntime,
     GRAPH_ID,
@@ -66,9 +70,11 @@ def _default_database_uri() -> str:
     return os.getenv("DATABASE_URI", "sqlite:///tmp/rerai-backend.db")
 
 
-def _default_internal_secret() -> str:
-    value = os.getenv("LANGGRAPH_INTERNAL_SHARED_SECRET", "").strip()
-    return value
+def _default_client_origins() -> list[str]:
+    configured = os.getenv("CLIENT_ORIGINS", "").strip()
+    if not configured:
+        return ["*"]
+    return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
 
 def _require_supported_features(payload: StreamRunRequest) -> None:
@@ -119,41 +125,74 @@ def get_runtime(request: Request) -> BackendRuntime:
     return request.app.state.runtime
 
 
+def get_auth(request: Request) -> AuthContext:
+    auth = getattr(request.state, "auth", None)
+    if not isinstance(auth, AuthContext):
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+    return auth
+
+
+async def authorize_thread(request: Request, thread_id: str) -> None:
+    auth = get_auth(request)
+    runtime = get_runtime(request)
+    thread_record = await asyncio.to_thread(runtime.metadata_store.get_thread, thread_id)
+    if thread_record is None:
+        return
+    if thread_record.metadata.get("convex_user_id") == auth.user.user_id:
+        return
+    await require_thread_owner(auth, request.app.state.convex_client, thread_id)
+
+
+def user_scoped_metadata(
+    auth: AuthContext, metadata: dict[str, Any] | None
+) -> dict[str, Any]:
+    next_metadata = dict(metadata or {})
+    next_metadata.setdefault("convex_user_id", auth.user.user_id)
+    return next_metadata
+
+
 def create_app(
     runtime: BackendRuntime | None = None,
     *,
-    internal_secret: str | None = None,
+    convex_client: ConvexAuthClient | None = None,
 ) -> FastAPI:
     load_project_env()
     database_uri = (
         runtime.database_uri if runtime is not None else (_default_database_uri())
     )
     active_runtime = runtime or BackendRuntime(database_uri)
-    shared_secret = internal_secret if internal_secret is not None else _default_internal_secret()
+    active_convex_client = convex_client or ConvexHttpClient()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await active_runtime.setup()
         app.state.runtime = active_runtime
+        app.state.convex_client = active_convex_client
         yield
 
     app = FastAPI(title="rerAI Backend", version="0.1.0", lifespan=lifespan)
 
     @app.middleware("http")
-    async def require_internal_secret(request: Request, call_next):
-        if request.url.path == "/ok":
+    async def require_user_auth(request: Request, call_next):
+        if request.url.path == "/ok" or request.method == "OPTIONS":
             return await call_next(request)
 
-        if not shared_secret:
-            return Response(
-                status_code=500,
-                content="Missing LANGGRAPH_INTERNAL_SHARED_SECRET",
+        try:
+            request.state.auth = await authenticate_request(
+                request.headers.get("authorization"),
+                active_convex_client,
             )
-
-        provided = request.headers.get("x-rerai-internal-secret", "").strip()
-        if provided != shared_secret:
-            return Response(status_code=401, content="Unauthorized")
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         return await call_next(request)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_default_client_origins(),
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
+        expose_headers=["Content-Location", "Location"],
+    )
 
     @app.get("/ok")
     async def ok() -> dict[str, bool]:
@@ -199,11 +238,12 @@ def create_app(
         payload: ThreadCreateRequest, request: Request, response: Response
     ) -> dict[str, Any]:
         thread_id = payload.thread_id or str(uuid4())
+        auth = get_auth(request)
         try:
             record = await asyncio.to_thread(
                 get_runtime(request).metadata_store.create_thread,
                 thread_id,
-                payload.metadata or {},
+                user_scoped_metadata(auth, payload.metadata),
                 if_exists=payload.if_exists or "raise",
             )
         except ValueError as exc:
@@ -213,6 +253,7 @@ def create_app(
 
     @app.get("/threads/{thread_id}")
     async def get_thread(thread_id: str, request: Request) -> dict[str, Any]:
+        await authorize_thread(request, thread_id)
         record = await asyncio.to_thread(
             get_runtime(request).metadata_store.get_thread, thread_id
         )
@@ -224,6 +265,7 @@ def create_app(
 
     @app.delete("/threads/{thread_id}", status_code=204)
     async def delete_thread(thread_id: str, request: Request) -> Response:
+        await authorize_thread(request, thread_id)
         deleted = await asyncio.to_thread(
             get_runtime(request).metadata_store.delete_thread, thread_id
         )
@@ -239,6 +281,7 @@ def create_app(
         request: Request,
         subgraphs: bool = Query(default=False),
     ) -> dict[str, Any]:
+        await authorize_thread(request, thread_id)
         thread_record = await asyncio.to_thread(
             get_runtime(request).metadata_store.get_thread, thread_id
         )
@@ -263,6 +306,7 @@ def create_app(
     async def get_thread_history(
         thread_id: str, payload: ThreadHistoryRequest, request: Request
     ) -> list[dict[str, Any]]:
+        await authorize_thread(request, thread_id)
         thread_record = await asyncio.to_thread(
             get_runtime(request).metadata_store.get_thread, thread_id
         )
@@ -310,7 +354,7 @@ def create_app(
         thread_record = await asyncio.to_thread(
             get_runtime(request).metadata_store.create_thread,
             str(uuid4()),
-            payload.metadata or {},
+            user_scoped_metadata(get_auth(request), payload.metadata),
             if_exists="raise",
         )
         return await _start_stream(thread_record.thread_id, payload, request)
@@ -331,13 +375,14 @@ def create_app(
                 thread_record = await asyncio.to_thread(
                     store.create_thread,
                     thread_id,
-                    payload.metadata or {},
+                    user_scoped_metadata(get_auth(request), payload.metadata),
                     if_exists="raise",
                 )
             else:
                 raise HTTPException(
                     status_code=404, detail=f"Thread '{thread_id}' not found"
                 )
+        await authorize_thread(request, thread_id)
         return await _start_stream(thread_record.thread_id, payload, request)
 
     async def _start_stream(
@@ -383,6 +428,7 @@ def create_app(
         cancel_on_disconnect: bool = Query(default=False),
     ) -> Response:
         runtime = get_runtime(request)
+        await authorize_thread(request, thread_id)
         run_record = await asyncio.to_thread(
             runtime.metadata_store.get_run, run_id, thread_id=thread_id
         )

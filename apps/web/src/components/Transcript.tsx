@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownContent } from "./MarkdownContent";
 import {
   extractMessageText,
@@ -14,7 +13,6 @@ type TranscriptProps = {
   isStreaming: boolean;
   showThinking: boolean;
   messages: unknown[];
-  progressDetail: string;
   sampleQueries: string[];
   onUseSample: (query: string) => void;
 };
@@ -24,7 +22,6 @@ export function Transcript({
   isStreaming,
   showThinking,
   messages,
-  progressDetail,
   sampleQueries,
   onUseSample,
 }: TranscriptProps) {

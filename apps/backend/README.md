@@ -1,11 +1,11 @@
 # rerAI backend
 
-This app hosts the rerAI deepagents graph behind a native FastAPI service that mimics the LangGraph thread/run surface the current web app already uses through Convex.
+This app hosts the rerAI deepagents graph behind a native FastAPI service that mimics the LangGraph thread/run surface the current web app uses directly.
 
 The backend keeps:
 - the existing `rerai_agent.graph` graph
 - LangGraph checkpoint/store persistence
-- the existing Convex proxy contract and frontend SDK usage
+- direct browser-to-backend SDK usage with Convex bearer-token auth
 
 It replaces:
 - the hosted/self-hosted Agent Server dependency
@@ -40,10 +40,8 @@ The service exposes the subset of endpoints the current app needs, including:
 - `/threads/{thread_id}/runs/stream`
 - `/threads/{thread_id}/runs/{run_id}/stream`
 
-Use these only from local development or from the authenticated Convex proxy layer.
-
-The backend now also requires an internal shared secret header on every route except `/ok`.
-Convex must send `X-RerAI-Internal-Secret` with the value from `LANGGRAPH_INTERNAL_SHARED_SECRET`.
+All routes except `/ok` require `Authorization: Bearer <Convex auth token>`.
+The backend validates the token and verifies thread ownership through Convex.
 
 ## Persistence
 
@@ -81,20 +79,16 @@ Recommended setup:
 
 1. Create a new Railway service for `apps/backend`.
 2. Set the root directory to `apps/backend`.
-3. Keep the backend service private/internal only.
+3. Expose the backend to the frontend origin.
 4. Set `DATABASE_URI` to a Supabase or Railway Postgres connection string.
-5. Set `LANGGRAPH_INTERNAL_SHARED_SECRET` on the backend service.
+5. Set `CONVEX_URL` to the Convex deployment URL used by `/api/query` and `/api/mutation`.
 6. Keep `LANGGRAPH_SETUP_DB=true` on the first deploy.
-7. Deploy from GitHub.
-
-For the authenticated Convex proxy, set:
-
-- `LANGGRAPH_INTERNAL_API_URL` to the internal Railway URL for the backend service
-- `LANGGRAPH_INTERNAL_SHARED_SECRET=<same-random-secret-on-convex-and-backend>`
+7. Set `CLIENT_ORIGINS` to the deployed web origin.
+8. Deploy from GitHub.
 
 Notes:
 - Railway injects the runtime port, so the backend container must not assume `8000` is the actual listening port in production.
-- Convex and the backend must use the same `LANGGRAPH_INTERNAL_SHARED_SECRET`.
+- The frontend sends Convex auth tokens to the backend for LangGraph calls.
 
 ## Supabase Postgres
 

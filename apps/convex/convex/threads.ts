@@ -1,7 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
-import { internal } from "./_generated/api";
 import { getViewer } from "./lib/auth";
 import { buildPreview, buildThreadTitle, requireThreadOwner } from "./lib/threads";
 
@@ -115,13 +114,6 @@ export const remove = mutation({
       await ctx.db.delete(runState._id);
     }
 
-    if (thread.langgraphThreadId) {
-      await ctx.runMutation(internal.langgraphThreads.forgetThread, {
-        userId,
-        langgraphThreadId: thread.langgraphThreadId,
-      });
-    }
-
     const preferences = await ctx.db
       .query("userPreferences")
       .withIndex("by_userId", (q) => q.eq("userId", userId))
@@ -144,7 +136,7 @@ export const attachLangGraphThread = mutation({
     langgraphThreadId: v.string(),
   },
   handler: async (ctx, args) => {
-    const { thread, userId } = await requireThreadOwner(ctx, args.threadId);
+    const { thread } = await requireThreadOwner(ctx, args.threadId);
     if (
       thread.langgraphThreadId !== undefined &&
       thread.langgraphThreadId !== args.langgraphThreadId
@@ -152,12 +144,12 @@ export const attachLangGraphThread = mutation({
       throw new Error("Thread is already linked to a different LangGraph thread");
     }
 
-    const allowedThread = await ctx.db
-      .query("langgraphThreads")
+    const linkedThreads = await ctx.db
+      .query("uiThreads")
       .withIndex("by_langgraphThreadId", (q) => q.eq("langgraphThreadId", args.langgraphThreadId))
-      .unique();
-    if (allowedThread === null || allowedThread.userId !== userId) {
-      throw new Error("LangGraph thread must be created through the authenticated proxy");
+      .take(16);
+    if (linkedThreads.some((linkedThread) => linkedThread._id !== thread._id)) {
+      throw new Error("LangGraph thread is already linked to another conversation");
     }
 
     await ctx.db.patch(thread._id, {

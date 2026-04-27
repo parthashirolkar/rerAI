@@ -9,9 +9,8 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as backend from "../backend.js";
 import type * as http from "../http.js";
-import type * as langgraphProxy from "../langgraphProxy.js";
-import type * as langgraphThreads from "../langgraphThreads.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_threads from "../lib/threads.js";
 import type * as messages from "../messages.js";
@@ -28,9 +27,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  backend: typeof backend;
   http: typeof http;
-  langgraphProxy: typeof langgraphProxy;
-  langgraphThreads: typeof langgraphThreads;
   "lib/auth": typeof lib_auth;
   "lib/threads": typeof lib_threads;
   messages: typeof messages;

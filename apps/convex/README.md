@@ -1,12 +1,12 @@
 # rerAI Convex app
 
-This app is the public/authenticated boundary for rerAI.
+This app owns rerAI identity and reactive application data.
 
 It owns:
 - Google sign-in through Convex Auth
 - user identity and viewer records
 - app state such as threads, messages, and preferences
-- the authenticated `/langgraph` proxy to the Railway backend
+- backend-facing auth and thread ownership checks used by FastAPI
 
 ## Local Development
 
@@ -21,17 +21,10 @@ Local connection settings live in [apps/convex/.env.local](/home/partha/git-repo
 
 Set these on the Convex deployment:
 
-- `LANGGRAPH_INTERNAL_API_URL`
-- `LANGGRAPH_INTERNAL_SHARED_SECRET`
-- `CLIENT_ORIGINS`
 - `AUTH_GOOGLE_ID`
 - `AUTH_GOOGLE_SECRET`
 
-What they do:
-- `LANGGRAPH_INTERNAL_API_URL`: the public Railway backend URL that Convex proxies requests to
-- `LANGGRAPH_INTERNAL_SHARED_SECRET`: shared secret forwarded by [convex/langgraphProxy.ts](/home/partha/git-repos/rerAI/apps/convex/convex/langgraphProxy.ts)
-- `CLIENT_ORIGINS`: comma-separated allowed frontend origins for the proxy CORS layer
-- `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`: Google OAuth credentials used by Convex Auth
+`AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` are the Google OAuth credentials used by Convex Auth.
 
 ## Google OAuth
 

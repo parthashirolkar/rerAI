@@ -1,6 +1,7 @@
 {
     "name": "rerAI",
     "private": true,
+    "type": "module",
     "packageManager": "bun@1.2.22",
     "workspaces": [
         "apps/*"
@@ -12,15 +13,22 @@
         "backend:lint": "cd apps/backend && OPENROUTER_API_KEY=dummy uv run ruff check .",
         "web:dev": "cd apps/web && bun run dev",
         "web:build": "cd apps/web && bun run build",
+        "web:lint": "eslint apps/web --max-warnings=0",
         "convex:dev": "cd apps/convex && bun run dev",
         "convex:deploy": "cd apps/convex && bun run deploy",
-        "lint": "bun run backend:lint",
+        "convex:lint": "eslint apps/convex --max-warnings=0",
+        "lint": "bun run backend:lint && bun run web:lint && bun run convex:lint",
         "dev": "concurrently -k -n backend,web,convex -c \"blue.bold,green.bold,magenta.bold\" \"bun run backend:dev\" \"bun run web:dev\" \"bun run convex:dev\"",
         "test": "bun run backend:test && bun run web:build",
         "build": "bun run web:build"
     },
     "devDependencies": {
+        "@eslint/js": "^9.39.2",
         "concurrently": "^9.2.1",
-        "happy-dom": "^20.9.0"
+        "eslint": "^9.39.2",
+        "eslint-plugin-react-hooks": "^7.0.1",
+        "globals": "^16.5.0",
+        "happy-dom": "^20.9.0",
+        "typescript-eslint": "^8.50.0"
     }
 }
