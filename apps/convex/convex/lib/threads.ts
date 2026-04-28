@@ -27,3 +27,21 @@ export async function requireThreadOwner(
 
   return { thread: thread as Doc<"uiThreads">, user, userId };
 }
+
+export async function getThreadOwnerOrNull(
+  ctx: ThreadAccessCtx,
+  threadId: Id<"uiThreads">,
+) {
+  const { user, userId } = await getViewer(ctx);
+  const thread = await ctx.db.get(threadId);
+
+  if (thread === null) {
+    return { thread: null, user, userId };
+  }
+
+  if (thread.userId !== userId) {
+    throw new Error("Unauthorized");
+  }
+
+  return { thread: thread as Doc<"uiThreads">, user, userId };
+}

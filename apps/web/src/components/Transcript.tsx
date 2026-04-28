@@ -2,17 +2,13 @@ import { useEffect, useRef } from "react";
 import { MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MarkdownContent } from "./MarkdownContent";
-import {
-  extractMessageText,
-  getMessageKey,
-  isAssistantMessage,
-} from "@/lib/messages";
+import type { ChatMessage } from "@/lib/messages";
 
 type TranscriptProps = {
   hasMessages: boolean;
   isStreaming: boolean;
   showThinking: boolean;
-  messages: unknown[];
+  messages: ChatMessage[];
   sampleQueries: string[];
   onUseSample: (query: string) => void;
 };
@@ -65,26 +61,25 @@ export function Transcript({
 
         <div className="flex flex-col gap-4">
           {messages.map((message, index) => {
-            const assistant = isAssistantMessage(message);
+            const isAssistant = message.role === "assistant";
             const isLastMessage = index === messages.length - 1;
-            const text = extractMessageText(message);
-            const showStreamingCursor = assistant && isLastMessage && isStreaming;
+            const showStreamingCursor = isAssistant && isLastMessage && isStreaming;
             return (
               <div
-                key={getMessageKey(message, index)}
-                className={`flex ${assistant ? "justify-start" : "justify-end"}`}
+                key={message.id ?? message._id ?? `msg-${index}`}
+                className={`flex ${isAssistant ? "justify-start" : "justify-end"}`}
               >
                 <div
                   className={
-                    assistant
+                    isAssistant
                       ? "chat-bubble-assistant"
                       : "chat-bubble-user"
                   }
                 >
-                  {assistant ? (
+                  {isAssistant ? (
                     <>
-                      {text ? (
-                        <MarkdownContent>{text}</MarkdownContent>
+                      {message.content ? (
+                        <MarkdownContent>{message.content}</MarkdownContent>
                       ) : null}
                       {showStreamingCursor && (
                         <span className="inline-block ml-0.5 w-1.5 h-4 bg-foreground/50 animate-pulse align-text-bottom rounded-sm" />
@@ -92,7 +87,7 @@ export function Transcript({
                     </>
                   ) : (
                     <p className="whitespace-pre-wrap">
-                      {text}
+                      {message.content}
                     </p>
                   )}
                 </div>
