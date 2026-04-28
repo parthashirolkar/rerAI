@@ -1,7 +1,25 @@
+import type { Id } from "@convex-generated/dataModel";
+
+export type ChatMessage = {
+  _id?: Id<"uiMessages">;
+  id?: string;
+  langgraphMessageId?: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: number;
+};
+
+export type AssistantMirrorPayload = {
+  langgraphMessageId?: string;
+  content: string;
+  createdAt: number;
+};
+
 type MessageLike = {
   content?: unknown;
   id?: string;
   _id?: string;
+  langgraphMessageId?: string;
   role?: string;
   type?: string;
   createdAt?: number;
@@ -22,7 +40,7 @@ type ContentBlock = {
   type?: string;
 };
 
-function getMessageType(message: MessageLike) {
+function getMessageType(message: MessageLike): string {
   const nestedType = message.data?.type;
   return (
     message.getType?.() ??
@@ -38,138 +56,173 @@ function getNestedMessage(message: unknown): MessageLike | null {
   if (!message || typeof message !== "object") {
     return null;
   }
-
   const candidate = message as MessageLike;
   if (candidate.data && typeof candidate.data === "object") {
     return candidate.data;
   }
-
   return null;
 }
 
-function getMessageContent(message: MessageLike) {
+function getMessageContent(message: MessageLike): unknown {
   if (message.content !== undefined) {
     return message.content;
   }
-
   return getNestedMessage(message)?.content;
-}
-
-function getMessageId(message: MessageLike) {
-  if (message.id) {
-    return message.id;
-  }
-
-  const nested = getNestedMessage(message);
-  if (nested?.id) {
-    return nested.id;
-  }
-
-  if (message._id) {
-    return message._id;
-  }
-
-  return null;
 }
 
 function extractBlockText(block: unknown): string {
   if (typeof block === "string") {
     return block;
   }
-
   if (!block || typeof block !== "object") {
     return "";
   }
-
   const contentBlock = block as ContentBlock;
   if (typeof contentBlock.text === "string") {
     return contentBlock.text;
   }
-
   return "";
 }
 
-export function extractMessageText(message: unknown): string {
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-
-  const content = getMessageContent(message as MessageLike);
+function extractText(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }
-
   if (Array.isArray(content)) {
     return content.map(extractBlockText).filter(Boolean).join("\n");
   }
-
   return "";
 }
 
-export function isAssistantMessage(message: unknown) {
-  if (!message || typeof message !== "object") {
-    return false;
+function normalizeRole(type: string): "user" | "assistant" | null {
+  if (type === "ai" || type === "assistant") {
+    return "assistant";
   }
-
-  const type = getMessageType(message as MessageLike);
-  return type === "ai" || type === "assistant";
-}
-
-export function isUserMessage(message: unknown) {
-  if (!message || typeof message !== "object") {
-    return false;
+  if (type === "human" || type === "user") {
+    return "user";
   }
-
-  const type = getMessageType(message as MessageLike);
-  return type === "human" || type === "user";
-}
-
-export function getMessageKey(message: unknown, index: number) {
-  if (message && typeof message === "object") {
-    const value = getMessageId(message as MessageLike);
-    if (value) {
-      return value;
-    }
-  }
-
-  return `message-${index}`;
-}
-
-export function getMessageTimestamp(message: unknown) {
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-
-  const candidate = message as MessageLike;
-  if (typeof candidate.createdAt === "number") {
-    return candidate.createdAt;
-  }
-
-  if (typeof candidate._creationTime === "number") {
-    return candidate._creationTime;
-  }
-
-  const nested = getNestedMessage(candidate);
-  if (typeof nested?.createdAt === "number") {
-    return nested.createdAt;
-  }
-
-  if (typeof nested?._creationTime === "number") {
-    return nested._creationTime;
-  }
-
   return null;
 }
 
-export function extractThreadStateMessages(state: unknown): unknown[] {
+function normalizeSingleMessage(raw: unknown): ChatMessage | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const message = raw as MessageLike;
+  const role = normalizeRole(getMessageType(message));
+  if (!role) {
+    return null;
+  }
+
+  const content = extractText(getMessageContent(message));
+
+  let createdAt: number | undefined;
+  if (typeof message.createdAt === "number") {
+    createdAt = message.createdAt;
+  } else if (typeof message._creationTime === "number") {
+    createdAt = message._creationTime;
+  } else {
+    const nested = getNestedMessage(message);
+    if (typeof nested?.createdAt === "number") {
+      createdAt = nested.createdAt;
+    } else if (typeof nested?._creationTime === "number") {
+      createdAt = nested._creationTime;
+    }
+  }
+
+  let id: string | undefined;
+  if (message.id) {
+    id = message.id;
+  } else {
+    const nested = getNestedMessage(message);
+    if (nested?.id) {
+      id = nested.id;
+    }
+  }
+
+  const normalized: ChatMessage = {
+    _id: message._id as Id<"uiMessages"> | undefined,
+    id: id ?? message.langgraphMessageId,
+    role,
+    content,
+    createdAt: createdAt ?? Date.now(),
+  };
+  if (message.langgraphMessageId) {
+    normalized.langgraphMessageId = message.langgraphMessageId;
+  }
+
+  return normalized;
+}
+
+export function normalizeMessages(raw: unknown[]): ChatMessage[] {
+  const result: ChatMessage[] = [];
+  for (const item of raw) {
+    const normalized = normalizeSingleMessage(item);
+    if (normalized) {
+      result.push(normalized);
+    }
+  }
+  return result;
+}
+
+export function extractThreadMessages(state: unknown): ChatMessage[] {
   if (!state || typeof state !== "object") {
     return [];
   }
-
   const messages = (state as ThreadStateLike).values?.messages;
   if (!Array.isArray(messages)) {
     return [];
   }
+  return normalizeMessages(messages);
+}
 
-  return messages.filter((message) => isUserMessage(message) || isAssistantMessage(message));
+export function toAssistantMirrorPayload(
+  messages: ChatMessage[],
+): AssistantMirrorPayload[] {
+  return messages
+    .filter((message) => message.role === "assistant" && message.content.trim().length > 0)
+    .map((message) => ({
+      langgraphMessageId: message.id || message.langgraphMessageId || undefined,
+      content: message.content,
+      createdAt: message.createdAt,
+    }));
+}
+
+export function selectLiveAssistantMessage(
+  persistedMessages: ChatMessage[],
+  streamMessages: ChatMessage[],
+): ChatMessage | null {
+  const persistedAssistantIds = new Set(
+    persistedMessages
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.id ?? message.langgraphMessageId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const persistedAssistantContent = new Set(
+    persistedMessages
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.content.trim())
+      .filter(Boolean),
+  );
+
+  for (let index = streamMessages.length - 1; index >= 0; index -= 1) {
+    const message = streamMessages[index];
+    if (message?.role !== "assistant" || !message.content.trim()) {
+      continue;
+    }
+
+    const messageId = message.id ?? message.langgraphMessageId;
+    if (messageId && persistedAssistantIds.has(messageId)) {
+      continue;
+    }
+
+    if (!messageId && persistedAssistantContent.has(message.content.trim())) {
+      continue;
+    }
+
+    return message;
+  }
+
+  return null;
 }

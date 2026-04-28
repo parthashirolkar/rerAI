@@ -2,7 +2,12 @@ import { paginationOptsValidator } from "convex/server";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
-import { buildPreview, buildThreadTitle, requireThreadOwner } from "./lib/threads";
+import {
+  buildPreview,
+  buildThreadTitle,
+  getThreadOwnerOrNull,
+  requireThreadOwner,
+} from "./lib/threads";
 
 export const listByThread = query({
   args: {
@@ -10,7 +15,15 @@ export const listByThread = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    await requireThreadOwner(ctx, args.threadId);
+    const { thread } = await getThreadOwnerOrNull(ctx, args.threadId);
+    if (thread === null) {
+      return {
+        page: [],
+        isDone: true,
+        continueCursor: "",
+      };
+    }
+
     return await ctx.db
       .query("uiMessages")
       .withIndex("by_threadId_and_createdAt", (q) => q.eq("threadId", args.threadId))

@@ -2,7 +2,7 @@ import type { MutationCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
-import { requireThreadOwner } from "./lib/threads";
+import { getThreadOwnerOrNull, requireThreadOwner } from "./lib/threads";
 
 async function upsertRunState(
   ctx: MutationCtx,
@@ -40,7 +40,11 @@ export const getForThread = query({
     threadId: v.id("uiThreads"),
   },
   handler: async (ctx, args) => {
-    await requireThreadOwner(ctx, args.threadId);
+    const { thread } = await getThreadOwnerOrNull(ctx, args.threadId);
+    if (thread === null) {
+      return null;
+    }
+
     return await ctx.db
       .query("threadRunState")
       .withIndex("by_threadId", (q) => q.eq("threadId", args.threadId))

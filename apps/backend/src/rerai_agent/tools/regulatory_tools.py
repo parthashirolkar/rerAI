@@ -10,8 +10,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from rerai_agent.tools.config import CHROMA_DATABASE, CHROMA_TENANT, get_embeddings
 
-CHROMA_API_KEY = os.environ.get("CHROMA_API_KEY")
-
 PDF_DIR = os.environ.get(
     "UDCPR_PDF_DIR",
     str(Path(__file__).resolve().parents[4] / "data" / "pdfs"),
@@ -35,12 +33,13 @@ def _get_vector_store() -> Chroma:
     embeddings = get_embeddings()
 
     # Connect to ChromaDB Cloud
+    chroma_api_key = os.environ.get("CHROMA_API_KEY")
     _vector_store = Chroma(
         collection_name="udcpr",
         embedding_function=embeddings,
         tenant=CHROMA_TENANT,
         database=CHROMA_DATABASE,
-        chroma_cloud_api_key=CHROMA_API_KEY,
+        chroma_cloud_api_key=chroma_api_key,
     )
 
     # Check if collection is empty and ingest if needed
