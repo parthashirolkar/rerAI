@@ -11,16 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from rerai_agent.env import load_project_env
-
 from .auth import AuthContext, authenticate_request, require_thread_owner
 from .convex import ConvexAuthClient, ConvexHttpClient
 from .runtime import (
     BackendRuntime,
     GRAPH_ID,
-    format_state_snapshot,
     parse_assistant_id,
-    parse_stream_modes,
+    sse_response,
     thread_payload,
 )
 
@@ -90,28 +87,6 @@ def _require_supported_features(payload: StreamRunRequest) -> None:
         )
 
 
-def _parse_before_config(
-    thread_id: str, before: str | dict[str, Any] | None
-) -> dict[str, Any] | None:
-    if before is None:
-        return None
-    configurable = {"thread_id": thread_id}
-    if isinstance(before, str):
-        configurable["checkpoint_id"] = before
-    else:
-        configurable.update(before)
-    return {"configurable": configurable}
-
-
-def _base_thread_config(
-    thread_id: str, checkpoint: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    configurable = {"thread_id": thread_id}
-    if checkpoint:
-        configurable.update(checkpoint)
-    return {"configurable": configurable}
-
-
 def _raise_if_missing_checkpointer(exc: Exception, *, detail: str) -> None:
     if isinstance(exc, ValueError) and str(exc) == "No checkpointer set":
         raise HTTPException(status_code=503, detail=detail) from exc
@@ -135,7 +110,9 @@ def get_auth(request: Request) -> AuthContext:
 async def authorize_thread(request: Request, thread_id: str) -> None:
     auth = get_auth(request)
     runtime = get_runtime(request)
-    thread_record = await asyncio.to_thread(runtime.metadata_store.get_thread, thread_id)
+    thread_record = await asyncio.to_thread(
+        runtime.metadata_store.get_thread, thread_id
+    )
     if thread_record is None:
         return
     if thread_record.metadata.get("convex_user_id") == auth.user.user_id:
@@ -156,7 +133,6 @@ def create_app(
     *,
     convex_client: ConvexAuthClient | None = None,
 ) -> FastAPI:
-    load_project_env()
     database_uri = (
         runtime.database_uri if runtime is not None else (_default_database_uri())
     )
@@ -183,7 +159,9 @@ def create_app(
                 active_convex_client,
             )
         except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+            return JSONResponse(
+                status_code=exc.status_code, content={"detail": exc.detail}
+            )
         return await call_next(request)
 
     app.add_middleware(
@@ -243,7 +221,7 @@ def create_app(
             record = await asyncio.to_thread(
                 get_runtime(request).metadata_store.create_thread,
                 thread_id,
-                user_scoped_metadata(auth, payload.metadata),
+                metadata=user_scoped_metadata(auth, payload.metadata),
                 if_exists=payload.if_exists or "raise",
             )
         except ValueError as exc:
@@ -290,9 +268,8 @@ def create_app(
                 status_code=404, detail=f"Thread '{thread_id}' not found"
             )
         try:
-            snapshot = await get_runtime(request).graph.aget_state(
-                _base_thread_config(thread_id),
-                subgraphs=subgraphs,
+            return await get_runtime(request).orchestrator.state(
+                thread_id=thread_id, subgraphs=subgraphs
             )
         except Exception as exc:
             _raise_if_missing_checkpointer(
@@ -300,7 +277,6 @@ def create_app(
                 detail="Thread state is unavailable because persistence is disabled",
             )
             raise
-        return format_state_snapshot(snapshot)
 
     @app.post("/threads/{thread_id}/history")
     async def get_thread_history(
@@ -315,13 +291,13 @@ def create_app(
                 status_code=404, detail=f"Thread '{thread_id}' not found"
             )
         try:
-            history = get_runtime(request).graph.aget_state_history(
-                _base_thread_config(thread_id, payload.checkpoint),
-                filter=payload.metadata,
-                before=_parse_before_config(thread_id, payload.before),
+            return await get_runtime(request).orchestrator.history(
+                thread_id=thread_id,
+                checkpoint=payload.checkpoint,
                 limit=payload.limit,
+                before=payload.before,
+                metadata_filter=payload.metadata,
             )
-            snapshots = [format_state_snapshot(snapshot) async for snapshot in history]
         except Exception as exc:
             _raise_if_missing_checkpointer(
                 exc,
@@ -329,14 +305,13 @@ def create_app(
             )
             if _history_fallback_enabled(exc):
                 try:
-                    snapshot = await get_runtime(request).graph.aget_state(
-                        _base_thread_config(thread_id, payload.checkpoint)
+                    snapshot = await get_runtime(request).orchestrator.state(
+                        thread_id=thread_id, checkpoint=payload.checkpoint
                     )
                 except NotImplementedError:
                     return []
-                return [format_state_snapshot(snapshot)]
+                return [snapshot]
             raise
-        return snapshots
 
     @app.post("/runs/stream")
     async def stream_run_stateless(
@@ -354,7 +329,7 @@ def create_app(
         thread_record = await asyncio.to_thread(
             get_runtime(request).metadata_store.create_thread,
             str(uuid4()),
-            user_scoped_metadata(get_auth(request), payload.metadata),
+            metadata=user_scoped_metadata(get_auth(request), payload.metadata),
             if_exists="raise",
         )
         return await _start_stream(thread_record.thread_id, payload, request)
@@ -375,7 +350,7 @@ def create_app(
                 thread_record = await asyncio.to_thread(
                     store.create_thread,
                     thread_id,
-                    user_scoped_metadata(get_auth(request), payload.metadata),
+                    metadata=user_scoped_metadata(get_auth(request), payload.metadata),
                     if_exists="raise",
                 )
             else:
@@ -390,9 +365,6 @@ def create_app(
     ) -> Response:
         runtime = get_runtime(request)
         payload_dict = payload.model_dump()
-        payload_dict["stream_mode"] = parse_stream_modes(
-            payload_dict.get("stream_mode")
-        )
         payload_dict["interrupt_before"] = None
         payload_dict["interrupt_after"] = None
         if payload_dict.get("multitask_strategy") not in (None, "interrupt"):
@@ -400,23 +372,16 @@ def create_app(
                 status_code=422, detail="Unsupported multitask_strategy for MVP1"
             )
         try:
-            run_record = await runtime.run_manager.start_run(
+            sub = await runtime.orchestrator.start(
                 thread_id=thread_id,
                 assistant_id=payload.assistant_id,
                 payload=payload_dict,
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        response = await runtime.run_manager.stream_response(
-            run_id=run_record.run_id, thread_id=thread_id
+        return sse_response(
+            sub.events(), thread_id=thread_id, run_id=sub.run_id
         )
-        response.headers["Content-Location"] = (
-            f"/threads/{thread_id}/runs/{run_record.run_id}"
-        )
-        response.headers["Location"] = (
-            f"/threads/{thread_id}/runs/{run_record.run_id}/stream"
-        )
-        return response
 
     @app.get("/threads/{thread_id}/runs/{run_id}/stream")
     async def join_run_stream(
@@ -430,9 +395,9 @@ def create_app(
         runtime = get_runtime(request)
         await authorize_thread(request, thread_id)
         run_record = await asyncio.to_thread(
-            runtime.metadata_store.get_run, run_id, thread_id=thread_id
+            runtime.metadata_store.get_run, run_id
         )
-        if run_record is None:
+        if run_record is None or run_record.thread_id != thread_id:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
         after_id = 0
         if last_event_id and last_event_id != "-1":
@@ -442,12 +407,16 @@ def create_app(
                 raise HTTPException(
                     status_code=422, detail="Invalid Last-Event-ID"
                 ) from exc
-        _ = parse_stream_modes(stream_mode) if stream_mode is not None else None
-        return await runtime.run_manager.stream_response(
-            run_id=run_id,
+        sub = await runtime.orchestrator.attach(
+            run_id=run_id, thread_id=thread_id
+        )
+        return sse_response(
+            sub.events(
+                last_event_id=after_id,
+                cancel_on_disconnect=cancel_on_disconnect,
+            ),
             thread_id=thread_id,
-            last_event_id=after_id,
-            cancel_on_disconnect=cancel_on_disconnect,
+            run_id=run_id,
         )
 
     return app

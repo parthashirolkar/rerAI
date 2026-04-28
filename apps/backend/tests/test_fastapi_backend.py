@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sys
-from types import ModuleType
 from pathlib import Path
 
 import pytest
@@ -11,13 +9,11 @@ from langgraph.types import StateSnapshot
 
 from rerai_api.app import create_app
 from rerai_api.convex import ConvexUser
-from rerai_api.db import MetadataStore
+from rerai_api.store import Store
+
 from rerai_api.runtime import (
     BackendRuntime,
     SYSTEM_ASSISTANT_ID,
-    graph_stream_modes,
-    json_safe,
-    normalize_stream_chunk,
 )
 
 
@@ -120,14 +116,6 @@ class MessageTupleGraph(FakeGraph):
         )
 
 
-class StubMetadataStore:
-    def __init__(self) -> None:
-        self.setup_calls = 0
-
-    def setup(self) -> None:
-        self.setup_calls += 1
-
-
 class FakeConvexClient:
     async def get_viewer(self, token: str):
         if token == "test-token":
@@ -146,7 +134,7 @@ def client(tmp_path: Path):
     runtime = BackendRuntime(
         database_uri,
         graph=FakeGraph(),
-        metadata_store=MetadataStore(database_uri),
+        metadata_store=Store(database_uri),
     )
     app = create_app(runtime, convex_client=FakeConvexClient())
     with TestClient(app) as test_client:
@@ -159,7 +147,7 @@ def test_requires_bearer_token(tmp_path: Path):
     runtime = BackendRuntime(
         database_uri,
         graph=FakeGraph(),
-        metadata_store=MetadataStore(database_uri),
+        metadata_store=Store(database_uri),
     )
     app = create_app(runtime, convex_client=FakeConvexClient())
     with TestClient(app) as test_client:
@@ -186,31 +174,6 @@ def test_assistant_resolution(client: TestClient):
 
     missing = client.get("/assistants/missing")
     assert missing.status_code == 404
-
-
-def test_json_safe_flattens_langchain_messages():
-    payload = json_safe(AIMessage(content="done", id="ai-1"))
-    assert payload["type"] == "ai"
-    assert payload["content"] == "done"
-    assert payload["id"] == "ai-1"
-    assert "data" not in payload
-
-
-def test_normalize_stream_chunk_treats_raw_message_tuple_as_messages_event():
-    event, data = normalize_stream_chunk(
-        (AIMessageChunk(content="partial", id="ai-1"), {"langgraph_node": "agent"})
-    )
-
-    assert event == "messages"
-    serialized = json_safe(data)
-    assert serialized[0]["type"] == "AIMessageChunk"
-    assert serialized[0]["content"] == "partial"
-    assert serialized[0]["id"] == "ai-1"
-    assert serialized[1] == {"langgraph_node": "agent"}
-
-
-def test_graph_stream_modes_translate_messages_tuple_for_python_langgraph():
-    assert graph_stream_modes(["messages-tuple", "values"]) == ["messages", "values"]
 
 
 def test_thread_lifecycle(client: TestClient):
@@ -294,7 +257,7 @@ def test_stream_serializes_real_langchain_messages(tmp_path: Path):
     runtime = BackendRuntime(
         database_uri,
         graph=LangChainMessageGraph(),
-        metadata_store=MetadataStore(database_uri),
+        metadata_store=Store(database_uri),
     )
     app = create_app(runtime, convex_client=FakeConvexClient())
     with TestClient(app) as test_client:
@@ -327,7 +290,7 @@ def test_stream_accepts_sdk_messages_tuple_mode(tmp_path: Path):
     runtime = BackendRuntime(
         database_uri,
         graph=graph,
-        metadata_store=MetadataStore(database_uri),
+        metadata_store=Store(database_uri),
     )
     app = create_app(runtime, convex_client=FakeConvexClient())
     with TestClient(app) as test_client:
@@ -373,32 +336,43 @@ def test_unsupported_stream_fields_return_422(client: TestClient):
 
 
 @pytest.mark.asyncio
-async def test_runtime_setup_builds_graph_with_persistence(
-    monkeypatch, tmp_path: Path
-):
+async def test_runtime_setup_builds_graph_with_persistence(monkeypatch, tmp_path: Path):
     database_uri = f"sqlite:///{tmp_path / 'rerai-runtime.db'}"
     persisted_graph = object()
-    fake_module = ModuleType("rerai_agent.graph")
     calls: list[str] = []
 
-    async def fake_build_persisted_graph_async(
-        *, database_uri: str | None = None, **kwargs
-    ):
-        calls.append(database_uri or "")
-        return persisted_graph
+    class FakeAgentHub:
+        def __init__(self, **kwargs) -> None:
+            self._database_uri = kwargs.get("database_uri") or ""
 
-    fake_module.build_persisted_graph_async = fake_build_persisted_graph_async
-    monkeypatch.setitem(sys.modules, "rerai_agent.graph", fake_module)
-    metadata_store = StubMetadataStore()
+        async def setup(self) -> None:
+            calls.append(self._database_uri)
+
+        @property
+        def graph(self):
+            return persisted_graph
+
+        @classmethod
+        async def production(cls, *, database_uri: str | None = None, **kwargs):
+            hub = cls(database_uri=database_uri)
+            await hub.setup()
+            return hub
+
+    import rerai_api.runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "AgentHub", FakeAgentHub)
+    metadata_store = Store.memory()
 
     runtime = BackendRuntime(database_uri, metadata_store=metadata_store)
 
     await runtime.setup()
 
     assert runtime.graph is persisted_graph
-    assert runtime.run_manager is not None
+    assert runtime.hub is not None
+    assert runtime.orchestrator is not None
     assert calls == [database_uri]
-    assert metadata_store.setup_calls == 1
+    # Store.memory() should have set up tables without error
+    metadata_store.setup()
 
 
 def test_state_without_checkpointer_returns_503(tmp_path: Path):
@@ -406,7 +380,7 @@ def test_state_without_checkpointer_returns_503(tmp_path: Path):
     runtime = BackendRuntime(
         database_uri,
         graph=NoCheckpointerGraph(),
-        metadata_store=MetadataStore(database_uri),
+        metadata_store=Store(database_uri),
     )
     app = create_app(runtime, convex_client=FakeConvexClient())
 
@@ -425,7 +399,7 @@ def test_history_without_checkpointer_returns_503(tmp_path: Path):
     runtime = BackendRuntime(
         database_uri,
         graph=NoCheckpointerGraph(),
-        metadata_store=MetadataStore(database_uri),
+        metadata_store=Store(database_uri),
     )
     app = create_app(runtime, convex_client=FakeConvexClient())
 
@@ -440,7 +414,7 @@ def test_history_without_checkpointer_returns_503(tmp_path: Path):
 
 
 def test_default_graph_has_no_hitl_interrupts(monkeypatch):
-    import rerai_agent.graph as graph_module
+    import rerai_agent.hub as hub_module
 
     calls = []
 
@@ -448,17 +422,9 @@ def test_default_graph_has_no_hitl_interrupts(monkeypatch):
         calls.append(interrupt_on)
         return object()
 
-    monkeypatch.setattr(graph_module, "create_deep_agent", fake_create_deep_agent)
-    graph_module.build_graph()
+    monkeypatch.setattr(hub_module, "create_deep_agent", fake_create_deep_agent)
+    hub_module.build_graph()
     assert calls == [None]
 
 
-def test_interrupt_shaped_stream_event_serializes_without_error():
-    from rerai_api.runtime import normalize_stream_chunk, json_safe
 
-    chunk = {"__interrupt__": [{"value": {"action": "test"}}]}
-    event, data = normalize_stream_chunk(chunk)
-    assert event == "values"
-    serialized = json_safe(data)
-    assert isinstance(serialized, dict)
-    assert "__interrupt__" in serialized

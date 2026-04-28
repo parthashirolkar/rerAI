@@ -1,23 +1,12 @@
-from rerai_agent.tools.config import get_subagent_model
-from rerai_agent.tools.gis_tools import (
-    check_development_plan,
-    geocode_address,
-    query_pmrda_layer,
-)
-from rerai_agent.tools.rera_tools import get_rera_project_details, search_rera_projects
-from rerai_agent.tools.regulatory_tools import query_udcpr
-from rerai_agent.tools.transit_tools import check_transit_proximity
+from rerai_agent.registry import SubagentSpec
 
-_subagent_model = get_subagent_model()
-
-rera_analyst = {
-    "name": "rera-analyst",
-    "model": _subagent_model,
-    "description": (
+RERA_ANALYST = SubagentSpec(
+    name="rera-analyst",
+    description=(
         "Search MahaRERA registered projects by district and fetch project details. "
         "Use for developer compliance history, project registration status, and disputes."
     ),
-    "system_prompt": (
+    system_prompt=(
         "<role>\n"
         "You are a MahaRERA compliance analyst for Maharashtra, India.\n"
         "</role>\n"
@@ -51,18 +40,17 @@ rera_analyst = {
         "Do NOT include raw JSON. Return a clean, structured summary.\n"
         "</output_format>"
     ),
-    "tools": [search_rera_projects, get_rera_project_details],
-}
+    tool_names={"search_rera_projects", "get_rera_project_details"},
+)
 
-regulatory_checker = {
-    "name": "regulatory-checker",
-    "model": _subagent_model,
-    "description": (
+REGULATORY_CHECKER = SubagentSpec(
+    name="regulatory-checker",
+    description=(
         "Query Maharashtra UDCPR building regulations via semantic search. "
         "Use for FSI limits, setbacks, parking norms, fire safety, height restrictions, "
         "ground coverage, and zoning rules."
     ),
-    "system_prompt": (
+    system_prompt=(
         "<role>\n"
         "You are a building regulations expert specializing in Maharashtra UDCPR\n"
         "(Unified Development Control and Promotion Regulations, updated Jan 2025).\n"
@@ -93,19 +81,18 @@ regulatory_checker = {
         "- If data is not found in the corpus, state that explicitly rather than guessing.\n"
         "</output_format>"
     ),
-    "tools": [query_udcpr],
-}
+    tool_names={"query_udcpr"},
+)
 
-gis_analyst = {
-    "name": "gis-analyst",
-    "model": _subagent_model,
-    "description": (
+GIS_ANALYST = SubagentSpec(
+    name="gis-analyst",
+    description=(
         "Analyze spatial context for plots in Pune Metropolitan Region. "
         "Query transit proximity (metro, railway, bus), PMRDA GIS layers for "
         "jurisdiction boundaries, development plan zones, building permissions, "
         "and environmental overlays. Use for location assessment."
     ),
-    "system_prompt": (
+    system_prompt=(
         "<role>\n"
         "You are a GIS spatial analyst for Pune, Maharashtra.\n"
         "</role>\n"
@@ -143,12 +130,54 @@ gis_analyst = {
         "regulatory decisions.\n"
         "</output_format>"
     ),
-    "tools": [
-        geocode_address,
-        check_transit_proximity,
-        query_pmrda_layer,
-        check_development_plan,
-    ],
-}
+    tool_names={
+        "geocode_address",
+        "check_transit_proximity",
+        "query_pmrda_layer",
+        "check_development_plan",
+    },
+)
 
-ALL_SUBAGENTS = [rera_analyst, regulatory_checker, gis_analyst]
+TITLE_VERIFIER = SubagentSpec(
+    name="title-verifier",
+    description=(
+        "Fetch and analyze 7/12 extract data for land title verification. "
+        "Use for current ownership, land classification, area verification, and encumbrances."
+    ),
+    system_prompt=(
+        "<role>\n"
+        "You are a land records analyst for Maharashtra, India.\n"
+        "</role>\n"
+        "\n"
+        "<goal>\n"
+        "Given a plot identifier (address, survey/gat number, or coordinates), fetch and\n"
+        "analyze the 7/12 extract to verify title, ownership, land classification, and\n"
+        "encumbrances.\n"
+        "</goal>\n"
+        "\n"
+        "<workflow>\n"
+        "1. Identify the village and survey number from the query.\n"
+        "2. Fetch the 7/12 extract from Mahabhulekh or equivalent source.\n"
+        "3. Extract ownership details, land class, area, and any liabilities.\n"
+        "4. Cross-check area on record against claimed area if provided.\n"
+        "5. Summarize findings with clear caveats about data freshness.\n"
+        "</workflow>\n"
+        "\n"
+        "<persistence>\n"
+        "- If the 7/12 extract is unavailable, state that explicitly and proceed with\n"
+        "  whatever land record data is accessible.\n"
+        "- Do not fabricate ownership or encumbrance details.\n"
+        "</persistence>\n"
+        "\n"
+        "<output_format>\n"
+        "- Current owners and their shares\n"
+        "- Land classification (Agricultural / NA / Gairan)\n"
+        "- Encumbrances / liens noted in 7/12\n"
+        "- Area on record vs claimed\n"
+        "- Data source and date of extract\n"
+        "</output_format>"
+    ),
+    tool_names=set(),
+)
+
+

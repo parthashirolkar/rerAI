@@ -1,15 +1,21 @@
 import os
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from rerai_agent.env import load_project_env
-
-load_project_env()
+from rerai_agent.embeddings import OpenRouterEmbeddings
 
 os.environ.setdefault("USER_AGENT", "rerAI/0.1.0")
 
-OPENROUTER_API_KEY = SecretStr(os.environ["OPENROUTER_API_KEY"])
+OPENROUTER_API_KEY: SecretStr | None = None
+
+
+def _get_openrouter_api_key() -> SecretStr:
+    global OPENROUTER_API_KEY
+    if OPENROUTER_API_KEY is None:
+        OPENROUTER_API_KEY = SecretStr(os.environ["OPENROUTER_API_KEY"])
+    return OPENROUTER_API_KEY
+
 
 MAHARERA_PUBLIC_USERNAME = os.environ.get(
     "MAHARERA_PUBLIC_USERNAME", "@maharera_public_view"
@@ -26,31 +32,11 @@ CHROMA_TENANT = os.environ.get("CHROMA_TENANT", "c73d822b-82e7-4ba1-bd24-291c352
 CHROMA_DATABASE = os.environ.get("CHROMA_DATABASE", "RerAI-prod")
 
 
-class OpenRouterEmbeddings(OpenAIEmbeddings):
-    """OpenAIEmbeddings subclass that forces encoding_format='float' for OpenRouter compatibility."""
-
-    def embed_documents(self, texts, chunk_size=None, **kwargs):
-        kwargs.setdefault("encoding_format", "float")
-        return super().embed_documents(texts, chunk_size=chunk_size, **kwargs)
-
-    def embed_query(self, text, **kwargs):
-        kwargs.setdefault("encoding_format", "float")
-        return super().embed_query(text, **kwargs)
-
-    async def aembed_documents(self, texts, chunk_size=None, **kwargs):
-        kwargs.setdefault("encoding_format", "float")
-        return await super().aembed_documents(texts, chunk_size=chunk_size, **kwargs)
-
-    async def aembed_query(self, text, **kwargs):
-        kwargs.setdefault("encoding_format", "float")
-        return await super().aembed_query(text, **kwargs)
-
-
 def get_chat_model(**kwargs):
     return ChatOpenAI(
         model=CHAT_MODEL,
         base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
+        api_key=_get_openrouter_api_key(),
         streaming=True,
         **kwargs,
     )
@@ -60,7 +46,7 @@ def get_subagent_model(**kwargs):
     return ChatOpenAI(
         model=SUBAGENT_MODEL,
         base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
+        api_key=_get_openrouter_api_key(),
         streaming=True,
         **kwargs,
     )
@@ -70,6 +56,6 @@ def get_embeddings():
     return OpenRouterEmbeddings(
         model=EMBEDDING_MODEL,
         base_url=OPENROUTER_BASE_URL,
-        api_key=OPENROUTER_API_KEY,
+        api_key=_get_openrouter_api_key(),
         check_embedding_ctx_length=False,
     )
