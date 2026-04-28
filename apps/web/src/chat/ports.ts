@@ -93,7 +93,6 @@ export interface ChatOrchestratorState {
   statusNote: string | null;
   streamError: Error | null;
   isInterrupted: boolean;
-  hasReport: boolean;
 }
 
 export interface ChatOrchestratorActions {

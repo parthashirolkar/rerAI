@@ -28,6 +28,8 @@ export function createInMemoryBackendAdapter(
     get messages() {
       return messages;
     },
+    // This lightweight test adapter exposes the initialized run state/messages only.
+    // It does not emulate Convex's active-thread-scoped queries.
     setActiveThread() {},
     async ensureViewer() {},
     async createThread() {

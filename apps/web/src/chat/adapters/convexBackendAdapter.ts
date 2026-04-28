@@ -34,15 +34,8 @@ export function useConvexBackendAdapter(viewerReady: boolean): BackendPort {
   const threads = useMemo(() => (threadsResult ?? []) as Thread[], [threadsResult]);
 
   const messages = useMemo(() => {
-    const results = (paginatedMessages.results ?? []) as Array<
-      ChatMessage & { langgraphMessageId?: string }
-    >;
-    return results
-      .map((message) => ({
-        ...message,
-        id: message.id ?? message.langgraphMessageId,
-      }))
-      .sort((left, right) => left.createdAt - right.createdAt);
+    const results = (paginatedMessages.results ?? []) as ChatMessage[];
+    return [...results].sort((left, right) => left.createdAt - right.createdAt);
   }, [paginatedMessages.results]);
 
   const ensureViewerFn = useCallback(async () => {

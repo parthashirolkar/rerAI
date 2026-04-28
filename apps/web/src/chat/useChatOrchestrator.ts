@@ -306,7 +306,6 @@ export function useChatOrchestrator({
     statusNote: statusNote || null,
     streamError: stream.error,
     isInterrupted,
-    hasReport: false,
     selectThread,
     createThread,
     deleteThread,

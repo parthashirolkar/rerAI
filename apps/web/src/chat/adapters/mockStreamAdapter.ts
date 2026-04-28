@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import type { StreamState, StreamCallbacks } from "../ports";
 
 export function createMockStreamAdapter(
@@ -20,6 +20,7 @@ export function useMockStreamAdapter(
   config: { authToken: string | null; threadId: string | null },
   callbacks: StreamCallbacks,
 ): StreamState {
+  const finishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [state, setState] = useState<Omit<StreamState, "switchThread" | "submit" | "stop">>({
     messages: [],
     isLoading: false,
@@ -27,10 +28,22 @@ export function useMockStreamAdapter(
     interrupts: [],
   });
 
+  useEffect(() => {
+    return () => {
+      if (finishTimerRef.current) {
+        clearTimeout(finishTimerRef.current);
+      }
+    };
+  }, []);
+
   const switchThread = useCallback(
     (id: string | null) => {
       if (id) {
         callbacks.onThreadId?.(id);
+      }
+      if (finishTimerRef.current) {
+        clearTimeout(finishTimerRef.current);
+        finishTimerRef.current = null;
       }
       setState((prev) => ({ ...prev, messages: [], isLoading: false, error: null }));
     },
@@ -42,7 +55,11 @@ export function useMockStreamAdapter(
       setState((prev) => ({ ...prev, isLoading: true, error: null }));
       callbacks.onCreated?.({ run_id: "mock-run-1" });
       // Simulate stream finishing
-      setTimeout(() => {
+      if (finishTimerRef.current) {
+        clearTimeout(finishTimerRef.current);
+      }
+      finishTimerRef.current = setTimeout(() => {
+        finishTimerRef.current = null;
         setState((prev) => ({ ...prev, isLoading: false }));
         callbacks.onFinish?.({ values: { messages: payload.messages } });
       }, 10);
@@ -51,6 +68,10 @@ export function useMockStreamAdapter(
   );
 
   const stop = useCallback(() => {
+    if (finishTimerRef.current) {
+      clearTimeout(finishTimerRef.current);
+      finishTimerRef.current = null;
+    }
     setState((prev) => ({ ...prev, isLoading: false }));
     callbacks.onStop?.();
   }, [callbacks]);
