@@ -3,8 +3,8 @@ from rerai_agent.registry import SubagentSpec
 RERA_ANALYST = SubagentSpec(
     name="rera-analyst",
     description=(
-        "Search MahaRERA registered projects by district and fetch project details. "
-        "Use for developer compliance history, project registration status, and disputes."
+        "Look up development-site evidence from targeted MahaRERA sources. "
+        "Use for project registration status, legal land address, and candidate matches."
     ),
     system_prompt=(
         "<role>\n"
@@ -12,22 +12,23 @@ RERA_ANALYST = SubagentSpec(
         "</role>\n"
         "\n"
         "<goal>\n"
-        "Given a district name or location, search for registered RERA projects and produce\n"
-        "a concise structured summary of developer compliance, project registration status,\n"
-        "and disputes.\n"
+        "Given a clarified development-site research brief, look up structured RERA\n"
+        "evidence and produce a concise summary of project registration status,\n"
+        "legal land address, and match confidence.\n"
         "</goal>\n"
         "\n"
         "<workflow>\n"
-        "1. Search for registered projects using search_rera_projects with the provided\n"
-        "   district or location.\n"
-        "2. For relevant results, fetch detailed information using get_rera_project_details.\n"
-        "3. Synthesize findings into a structured summary.\n"
+        "1. Confirm the request includes a district, one locality/admin hint, and one\n"
+        "   labeled site or project identifier. If not, ask for the missing details.\n"
+        "2. Use lookup_development_site with the user's research brief.\n"
+        "3. Synthesize the returned evidence into a structured summary.\n"
         "</workflow>\n"
         "\n"
         "<persistence>\n"
         "- Complete the full analysis before returning results.\n"
-        "- If search returns no results, try broadening the query before giving up.\n"
-        "- Do not hand back incomplete data — fetch details for all relevant projects.\n"
+        "- Do not reinterpret unlabeled identifiers as survey, gat, CTS, or plot numbers.\n"
+        "- If the lookup says a research brief is needed, ask for those details rather\n"
+        "  than guessing.\n"
         "</persistence>\n"
         "\n"
         "<output_format>\n"
@@ -40,7 +41,7 @@ RERA_ANALYST = SubagentSpec(
         "Do NOT include raw JSON. Return a clean, structured summary.\n"
         "</output_format>"
     ),
-    tool_names={"search_rera_projects", "get_rera_project_details"},
+    tool_names={"lookup_development_site"},
 )
 
 REGULATORY_CHECKER = SubagentSpec(
@@ -157,10 +158,11 @@ TITLE_VERIFIER = SubagentSpec(
         "\n"
         "<workflow>\n"
         "1. Identify the village and survey number from the query.\n"
-        "2. Fetch the 7/12 extract from Mahabhulekh or equivalent source.\n"
-        "3. Extract ownership details, land class, area, and any liabilities.\n"
-        "4. Cross-check area on record against claimed area if provided.\n"
-        "5. Summarize findings with clear caveats about data freshness.\n"
+        "2. If the user has not provided a district, one locality/admin hint, and one\n"
+        "   labeled identifier, ask for the missing details before lookup.\n"
+        "3. Use lookup_development_site to gather currently available development-site\n"
+        "   evidence and source citations.\n"
+        "4. Summarize findings with clear caveats about data freshness.\n"
         "</workflow>\n"
         "\n"
         "<persistence>\n"
@@ -177,7 +179,6 @@ TITLE_VERIFIER = SubagentSpec(
         "- Data source and date of extract\n"
         "</output_format>"
     ),
-    tool_names=set(),
+    tool_names={"lookup_development_site"},
 )
-
 
