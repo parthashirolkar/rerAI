@@ -5,7 +5,8 @@ from rerai_agent.subagents.definitions import (
     REGULATORY_CHECKER,
     TITLE_VERIFIER,
 )
-from rerai_agent.tools import gis_tools, regulatory_tools, rera_tools, transit_tools
+from rerai_agent.tools import development_site_lookup, gis_tools, regulatory_tools
+from rerai_agent.tools import transit_tools
 from rerai_agent.tools.config import get_chat_model, get_subagent_model
 
 
@@ -15,8 +16,10 @@ def default_registry() -> Registry:
             chat_model_factory=get_chat_model,
             subagent_model_factory=get_subagent_model,
         )
-        .with_tool("search_rera_projects", rera_tools.search_rera_projects)
-        .with_tool("get_rera_project_details", rera_tools.get_rera_project_details)
+        .with_tool(
+            "lookup_development_site",
+            development_site_lookup.lookup_development_site,
+        )
         .with_tool("query_udcpr", regulatory_tools.query_udcpr)
         .with_tool("geocode_address", gis_tools.geocode_address)
         .with_tool("check_transit_proximity", transit_tools.check_transit_proximity)
