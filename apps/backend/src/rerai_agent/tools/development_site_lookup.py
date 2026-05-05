@@ -115,7 +115,7 @@ def _infer_locality_from_commas(query: str, district: str) -> Optional[str]:
             continue
         candidates.append(part)
 
-    return candidates[-1] if candidates else None
+    return candidates[0] if candidates else None
 
 
 def _build_development_site_query(
@@ -193,12 +193,12 @@ def _validate_research_brief(site_query: DevelopmentSiteQuery) -> list[str]:
             site_query.village,
             site_query.locality,
             site_query.taluka,
-            site_query.project_name,
-            site_query.rera_registration_number,
             site_query.rera_view_url,
         ]
     ):
-        missing.append("village/locality/taluka/project_name/rera_registration_number")
+        missing.append(
+            "village/locality/taluka, or a direct RERA view URL"
+        )
     if not any(
         [
             site_query.plot_number,
@@ -383,6 +383,7 @@ def _reduce_rera_detail(detail_text: str, source_url: str) -> dict[str, Any]:
         "source_url": source_url,
         "source_type": "official_rera",
         "project_id": data.get("projectId"),
+        # MahaRERA's public API spells this key as "Registartion".
         "rera_registration_number": public_info.get("projectRegistartionNo"),
         "project_name": public_info.get("projectName"),
         "project_type": public_info.get("projectTypeName"),
@@ -413,21 +414,26 @@ def _score_rera_evidence(
     site_query: DevelopmentSiteQuery, evidence: dict[str, Any]
 ) -> tuple[str, list[str]]:
     reasons = []
+    place_match_count = 0
+    identifier_match_count = 0
     legal = evidence.get("legal_land_address") or {}
     legal_text = " ".join(str(v or "") for v in legal.values())
     normalized_legal_text = _normalize_for_contains(legal_text)
     if site_query.district and str(legal.get("district") or "").lower() == (
         site_query.district.lower()
     ):
+        place_match_count += 1
         reasons.append("district matched official RERA legal land address")
     if site_query.taluka and str(legal.get("taluka") or "").lower() == (
         site_query.taluka.lower()
     ):
+        place_match_count += 1
         reasons.append("taluka matched official RERA legal land address")
     expected_village = site_query.village or site_query.locality
     if expected_village and str(legal.get("village") or "").lower() == (
         expected_village.lower()
     ):
+        place_match_count += 1
         reasons.append("village/locality matched official RERA legal land address")
     if site_query.rera_registration_number and evidence.get(
         "rera_registration_number"
@@ -450,12 +456,17 @@ def _score_rera_evidence(
         ("plot", site_query.plot_number),
     ):
         if value and _contains_labeled_identifier(normalized_legal_text, label, value):
+            identifier_match_count += 1
             reasons.append(
                 f"{label} number matched official RERA legal land address"
             )
 
-    if any("RERA registration" in r or "number matched" in r for r in reasons):
+    if any("RERA registration" in r for r in reasons):
         return "high", reasons
+    if identifier_match_count and place_match_count:
+        return "high", reasons
+    if identifier_match_count:
+        return "medium", reasons
     if len(reasons) >= 2:
         return "medium", reasons
     if reasons:
@@ -495,6 +506,18 @@ def _best_confidence(evidence: list[dict[str, Any]]) -> str:
     return best
 
 
+def _lookup_status(
+    search_results: list[SearchResult],
+    errors: list[str],
+    matched_rera_evidence: list[dict[str, Any]],
+) -> str:
+    if search_results or matched_rera_evidence:
+        return "completed"
+    if errors:
+        return "search_failed"
+    return "no_candidates_found"
+
+
 async def _search_exa(query: str, num_results: int) -> str:
     result = await _call_exa_mcp(
         "web_search_exa",
@@ -532,6 +555,11 @@ async def lookup_development_site(
     district, one locality/admin hint, and one labeled site or project identifier.
     The tool performs targeted discovery and returns bounded evidence with source
     citations. It does not return raw search dumps.
+
+    Official 7/12 retrieval is not implemented yet. Until a land-record source
+    adapter is added, ``land_record_evidence`` explicitly reports
+    ``not_implemented`` and must not be treated as ownership, encumbrance, or
+    land-classification evidence.
     """
     site_query = _build_development_site_query(
         query=query,
@@ -624,7 +652,7 @@ async def lookup_development_site(
 
     return _compact_json(
         {
-            "status": "completed" if search_results else "no_candidates_found",
+            "status": _lookup_status(search_results, errors, matched_rera_evidence),
             "query": asdict(site_query),
             "answer": {
                 "summary": (

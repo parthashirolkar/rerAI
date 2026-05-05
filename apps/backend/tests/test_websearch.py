@@ -23,9 +23,9 @@ class TestHelpers:
         monkeypatch.delenv("EXA_API_KEY", raising=False)
         assert _build_exa_mcp_url() == "https://mcp.exa.ai/mcp"
 
-    def test_build_exa_mcp_url_with_key(self, monkeypatch):
+    def test_build_exa_mcp_url_does_not_leak_key(self, monkeypatch):
         monkeypatch.setenv("EXA_API_KEY", "test-key-123")
-        assert _build_exa_mcp_url() == "https://mcp.exa.ai/mcp?exaApiKey=test-key-123"
+        assert _build_exa_mcp_url() == "https://mcp.exa.ai/mcp"
 
     def test_build_jsonrpc_request(self):
         req = _build_jsonrpc_request("web_search_exa", {"query": "hello"}, 42)

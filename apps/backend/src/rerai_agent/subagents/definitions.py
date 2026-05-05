@@ -88,7 +88,7 @@ REGULATORY_CHECKER = SubagentSpec(
 GIS_ANALYST = SubagentSpec(
     name="gis-analyst",
     description=(
-        "Analyze spatial context for plots in Pune Metropolitan Region. "
+        "Analyze spatial context for development sites in Pune Metropolitan Region. "
         "Query transit proximity (metro, railway, bus), PMRDA GIS layers for "
         "jurisdiction boundaries, development plan zones, building permissions, "
         "and environmental overlays. Use for location assessment."
@@ -142,8 +142,9 @@ GIS_ANALYST = SubagentSpec(
 TITLE_VERIFIER = SubagentSpec(
     name="title-verifier",
     description=(
-        "Fetch and analyze 7/12 extract data for land title verification. "
-        "Use for current ownership, land classification, area verification, and encumbrances."
+        "Analyze available land-record evidence for title verification. "
+        "Use for current ownership, land classification, area verification, and "
+        "encumbrances only when official land-record evidence is available."
     ),
     system_prompt=(
         "<role>\n"
@@ -151,18 +152,21 @@ TITLE_VERIFIER = SubagentSpec(
         "</role>\n"
         "\n"
         "<goal>\n"
-        "Given a plot identifier (address, survey/gat number, or coordinates), fetch and\n"
-        "analyze the 7/12 extract to verify title, ownership, land classification, and\n"
-        "encumbrances.\n"
+        "Given a development-site identifier (address, survey/gat number, or\n"
+        "coordinates), analyze available official land-record evidence to verify\n"
+        "title, ownership, land classification, and encumbrances.\n"
         "</goal>\n"
         "\n"
         "<workflow>\n"
         "1. Identify the village and survey number from the query.\n"
         "2. If the user has not provided a district, one locality/admin hint, and one\n"
         "   labeled identifier, ask for the missing details before lookup.\n"
-        "3. Use lookup_development_site to gather currently available development-site\n"
-        "   evidence and source citations.\n"
-        "4. Summarize findings with clear caveats about data freshness.\n"
+        "3. Use lookup_development_site to gather currently available evidence and\n"
+        "   source citations.\n"
+        "4. If land_record_evidence is not_implemented or unavailable, state that\n"
+        "   official 7/12 retrieval is not available and do not infer ownership,\n"
+        "   encumbrance, or land classification from RERA/web evidence.\n"
+        "5. Summarize findings with clear caveats about data freshness.\n"
         "</workflow>\n"
         "\n"
         "<persistence>\n"
@@ -181,4 +185,3 @@ TITLE_VERIFIER = SubagentSpec(
     ),
     tool_names={"lookup_development_site"},
 )
-

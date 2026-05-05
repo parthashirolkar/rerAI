@@ -1,14 +1,13 @@
-"""tools/websearch.py -- Web search via Exa MCP, modelled after opencode.
+"""tools/websearch.py -- Low-level web search via Exa MCP.
 
-Replicates opencode's built-in ``websearch`` tool which delegates to Exa AI
-via its MCP endpoint.  The tool accepts a natural-language query and returns
-ranked web results with optional live-crawled page content.
+This module contains Exa helpers and debug-oriented tools. The default agent
+registry uses the domain-level ``lookup_development_site`` tool instead of
+exposing raw web search results to the agent.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from typing import Optional
 
 import httpx
@@ -18,10 +17,12 @@ EXA_MCP_URL = "https://mcp.exa.ai/mcp"
 
 
 def _build_exa_mcp_url() -> str:
-    """Return the Exa MCP endpoint, appending the API key when available."""
-    key = os.environ.get("EXA_API_KEY")
-    if key:
-        return f"{EXA_MCP_URL}?exaApiKey={key}"
+    """Return the Exa MCP endpoint.
+
+    The public Exa MCP endpoint works for our current use without an API key.
+    Do not append ``EXA_API_KEY`` to the URL: query-string credentials can be
+    captured in proxy, server, and client logs.
+    """
     return EXA_MCP_URL
 
 

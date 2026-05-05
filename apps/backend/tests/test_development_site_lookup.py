@@ -29,6 +29,14 @@ class TestResearchBrief:
         assert site_query.gat_number is None
         assert site_query.locality == "Jamtha"
 
+    def test_build_query_uses_first_unidentified_comma_part_as_locality(self):
+        site_query = _build_development_site_query(
+            query="Check Plot 15, Jamtha, Pune, Near Highway",
+            district="Pune",
+        )
+
+        assert site_query.locality == "Jamtha"
+
     def test_rejects_missing_labeled_identifier(self):
         site_query = _build_development_site_query(
             query="Check Jamtha, Pune",
@@ -48,6 +56,16 @@ class TestResearchBrief:
 
         assert site_query.rera_registration_number == "P50500001839"
         assert _validate_research_brief(site_query) == []
+
+    def test_rejects_rera_registration_without_location_hint(self):
+        site_query = _build_development_site_query(
+            query="Check P50500001839",
+            district="Nagpur",
+        )
+
+        missing = _validate_research_brief(site_query)
+
+        assert any("village/locality/taluka" in item for item in missing)
 
     def test_accepts_official_rera_view_url_as_project_identifier(self):
         site_query = _build_development_site_query(
@@ -142,7 +160,25 @@ class TestReraReduction:
         assert evidence["legal_land_address"]["village"] == "Jamtha"
         assert "authenticated_info" not in evidence
 
-    def test_score_high_when_official_legal_identifier_matches(self):
+    def test_score_medium_when_only_official_legal_identifier_matches(self):
+        site_query = _build_development_site_query(
+            query="Survey No 15, Jamtha, Pune",
+            district="Pune",
+        )
+        evidence = {
+            "legal_land_address": {
+                "district": "Nagpur",
+                "village": "Ravet",
+                "boundaries_east": "Survey No 15",
+            }
+        }
+
+        confidence, reasons = _score_rera_evidence(site_query, evidence)
+
+        assert confidence == "medium"
+        assert any("survey number matched" in reason for reason in reasons)
+
+    def test_score_high_when_legal_identifier_and_location_match(self):
         site_query = _build_development_site_query(
             query="Survey No 15, Jamtha, Pune",
             district="Pune",
@@ -325,6 +361,24 @@ async def test_lookup_development_site_rejects_mismatched_rera_candidate(
     assert data["answer"]["confidence"] == "none"
     assert data["answer"]["summary"].startswith("No matching official RERA")
     assert data["rera_project_evidence"][0]["match_confidence"] == "no_match"
+
+
+async def test_lookup_development_site_reports_search_failure(monkeypatch):
+    async def failing_search_exa(query, num_results):
+        raise TimeoutError("network unavailable")
+
+    monkeypatch.setattr(lookup_module, "_search_exa", failing_search_exa)
+
+    result = await lookup_development_site.ainvoke(
+        {
+            "query": "Survey No 15, Jamtha, Pune",
+            "district": "Pune",
+        }
+    )
+    data = json.loads(result)
+
+    assert data["status"] == "search_failed"
+    assert data["errors"]
 
 
 @pytest.mark.live

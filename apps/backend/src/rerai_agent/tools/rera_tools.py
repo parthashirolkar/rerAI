@@ -453,6 +453,11 @@ async def _fetch_projects(district_name: str, max_pages: int = 1) -> list[dict]:
 async def search_rera_projects(district_name: str, max_pages: int = 1) -> str:
     """Search MahaRERA registered projects by district name.
 
+    Legacy broad-search helper. This tool is intentionally not registered in
+    the default agent registry because district-level search is too coarse for
+    development-site lookup. Keep it available for direct diagnostics and for
+    tests covering the older MahaRERA portal integration.
+
     Returns a JSON array of projects with RERA ID, name, promoter, and district.
     Each page has ~10 projects. Use max_pages to control breadth (default 1).
 
@@ -514,6 +519,11 @@ async def _call_api(operation: str, payload: dict, token: Optional[str] = None) 
 @tool
 async def get_rera_project_details(view_url: str) -> str:
     """Fetch detailed information for a MahaRERA project.
+
+    Internal detail fetcher for known project view URLs. This tool is
+    intentionally not registered in the default agent registry; agent-facing
+    workflows should call ``lookup_development_site`` so raw MahaRERA JSON is
+    reduced before it reaches the model.
 
     Given a view_url from search_rera_projects, fetches full project details
     via the MahaRERA public API including registration info, promoter details,
