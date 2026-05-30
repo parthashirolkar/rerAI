@@ -30,13 +30,13 @@ def _default_memory_files() -> list[str | Path]:
 def _default_tools() -> list[Callable]:
     from rerai_agent.factories import default_registry
 
-    return list(default_registry().assemble().tools)
+    return list(default_registry().assemble(resolve_models=False).tools)
 
 
 def _default_subagents() -> list[Any]:
     from rerai_agent.factories import default_registry
 
-    return list(default_registry().assemble().subagents)
+    return list(default_registry().assemble(resolve_models=False).subagents)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,10 +73,26 @@ class AgentHubConfig:
 
         api_key = os.environ.get("OPENROUTER_API_KEY")
         database_uri = os.environ.get("DATABASE_URI")
+        setup_db = os.environ.get("LANGGRAPH_SETUP_DB", "true").lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+
+        defaults = cls.__dataclass_fields__
 
         return cls(
             database_uri=database_uri or None,
             openrouter_api_key=SecretStr(api_key) if api_key else None,
+            chat_model=os.environ.get("CHAT_MODEL")
+            or defaults["chat_model"].default,
+            subagent_model=os.environ.get("SUBAGENT_MODEL")
+            or defaults["subagent_model"].default,
+            embedding_model=os.environ.get("EMBEDDING_MODEL")
+            or defaults["embedding_model"].default,
+            openrouter_base_url=os.environ.get("OPENROUTER_BASE_URL")
+            or defaults["openrouter_base_url"].default,
+            setup_db=setup_db,
         )
 
     @classmethod
@@ -324,7 +340,9 @@ def build_graph(
 
     if registry is None:
         registry = default_registry()
-    config = registry.assemble()
+    config = registry.assemble(
+        resolve_models=bool(os.environ.get("OPENROUTER_API_KEY"))
+    )
     return create_deep_agent(
         model=config.model,
         tools=config.tools,

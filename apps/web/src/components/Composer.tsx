@@ -80,6 +80,7 @@ export function Composer({ busy, draft, onChange, onSubmit }: ComposerProps) {
           />
           <Button
             size="icon-sm"
+            aria-label="Send message"
             disabled={busy || !draft.trim()}
             type="submit"
             className={multiLine ? "mb-0.5" : ""}

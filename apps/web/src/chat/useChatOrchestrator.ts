@@ -29,6 +29,7 @@ export function useChatOrchestrator({
 
   const selectedThreadIdRef = useRef<string | null>(selectedThreadId);
   const streamMessagesRef = useRef<unknown[]>([]);
+  const handledInterruptCountRef = useRef(0);
 
   useEffect(() => {
     selectedThreadIdRef.current = selectedThreadId;
@@ -254,7 +255,13 @@ export function useChatOrchestrator({
 
   // Handle interrupts
   useEffect(() => {
-    if (stream.interrupts.length > 0) {
+    const interruptCount = stream.interrupts.length;
+    if (interruptCount === 0) {
+      handledInterruptCountRef.current = 0;
+      return;
+    }
+    if (interruptCount !== handledInterruptCountRef.current) {
+      handledInterruptCountRef.current = interruptCount;
       setStatusNote("Chat session hit an unexpected pause — started a fresh conversation.");
       setSelectedThreadId(null);
       setLanggraphThreadId(null);

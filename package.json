@@ -19,7 +19,8 @@
         "convex:lint": "eslint apps/convex --max-warnings=0",
         "lint": "bun run backend:lint && bun run web:lint && bun run convex:lint",
         "dev": "concurrently -k -n backend,web,convex -c \"blue.bold,green.bold,magenta.bold\" \"bun run backend:dev\" \"bun run web:dev\" \"bun run convex:dev\"",
-        "test": "bun run backend:test && bun run web:build",
+        "web:test": "cd apps/web && bun run test",
+        "test": "bun run backend:test && bun run web:test",
         "build": "bun run web:build"
     },
     "devDependencies": {
@@ -28,7 +29,6 @@
         "eslint": "^9.39.2",
         "eslint-plugin-react-hooks": "^7.0.1",
         "globals": "^16.5.0",
-        "happy-dom": "^20.9.0",
         "typescript-eslint": "^8.50.0"
     }
 }
