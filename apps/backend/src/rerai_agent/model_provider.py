@@ -17,11 +17,13 @@ class OpenRouterModelProvider:
         chat_model: str = "nvidia/nemotron-3-super-120b-a12b:free",
         embedding_model: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free",
         base_url: str = "https://openrouter.ai/api/v1",
+        embedding_base_url: str | None = None,
     ) -> None:
         self._api_key = api_key
         self._chat_model = chat_model
         self._embedding_model = embedding_model
         self._base_url = base_url
+        self._embedding_base_url = embedding_base_url or base_url
 
     def get_chat_model(self, **kwargs: Any) -> BaseChatModel:
         from langchain_openai import ChatOpenAI
@@ -43,7 +45,7 @@ class OpenRouterModelProvider:
             raise RuntimeError("No OpenRouter API key configured")
         return OpenRouterEmbeddings(
             model=self._embedding_model,
-            base_url=self._base_url,
+            base_url=self._embedding_base_url,
             api_key=self._api_key,
             check_embedding_ctx_length=False,
             **kwargs,

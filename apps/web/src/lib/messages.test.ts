@@ -3,6 +3,7 @@ import {
   extractThreadMessages,
   normalizeMessages,
   selectLiveAssistantMessage,
+  selectLiveAssistantMessages,
   toAssistantMirrorPayload,
 } from "./messages";
 
@@ -246,5 +247,34 @@ describe("selectLiveAssistantMessage", () => {
     };
 
     expect(selectLiveAssistantMessage(persisted, [next])).toEqual(next);
+  });
+});
+
+describe("selectLiveAssistantMessages", () => {
+  test("returns every new assistant message in backend position order", () => {
+    const live = selectLiveAssistantMessages(
+      [],
+      [
+        {
+          role: "assistant",
+          id: "ai-final",
+          content: "Final answer",
+          createdAt: 300,
+          messagePosition: 1,
+        },
+        {
+          role: "assistant",
+          id: "ai-progress",
+          content: "Researching",
+          createdAt: 200,
+          messagePosition: 0,
+        },
+      ],
+    );
+
+    expect(live.map((message) => message.id)).toEqual([
+      "ai-progress",
+      "ai-final",
+    ]);
   });
 });

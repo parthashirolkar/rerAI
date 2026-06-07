@@ -34,8 +34,8 @@ CHROMA_DATABASE = os.environ.get("CHROMA_DATABASE", "RerAI-prod")
 
 def get_chat_model(**kwargs):
     return ChatOpenAI(
-        model=CHAT_MODEL,
-        base_url=OPENROUTER_BASE_URL,
+        model=os.environ.get("CHAT_MODEL", CHAT_MODEL),
+        base_url=os.environ.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL),
         api_key=_get_openrouter_api_key(),
         streaming=True,
         **kwargs,
@@ -44,8 +44,8 @@ def get_chat_model(**kwargs):
 
 def get_subagent_model(**kwargs):
     return ChatOpenAI(
-        model=SUBAGENT_MODEL,
-        base_url=OPENROUTER_BASE_URL,
+        model=os.environ.get("SUBAGENT_MODEL", SUBAGENT_MODEL),
+        base_url=os.environ.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL),
         api_key=_get_openrouter_api_key(),
         streaming=True,
         **kwargs,
@@ -54,8 +54,9 @@ def get_subagent_model(**kwargs):
 
 def get_embeddings():
     return OpenRouterEmbeddings(
-        model=EMBEDDING_MODEL,
-        base_url=OPENROUTER_BASE_URL,
+        model=os.environ.get("EMBEDDING_MODEL", EMBEDDING_MODEL),
+        base_url=os.environ.get("EMBEDDING_BASE_URL")
+        or os.environ.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL),
         api_key=_get_openrouter_api_key(),
         check_embedding_ctx_length=False,
     )

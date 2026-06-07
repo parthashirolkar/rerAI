@@ -10,10 +10,12 @@ import type {
   StreamCallbacks,
   StreamState,
   Thread,
+  TurnApiPort,
   UseStreamAdapter,
   Viewer,
 } from "./ports";
 import type { ChatMessage } from "@/lib/messages";
+import type { ConversationTurn } from "@/lib/messages";
 
 type BackendHarness = BackendPort & {
   calls: {
@@ -35,11 +37,13 @@ function createBackendHarness(initial?: {
   threads?: Thread[];
   runState?: RunState | null;
   messages?: ChatMessage[];
+  turns?: ConversationTurn[];
 }): BackendHarness {
   let activeThreadId: string | null = null;
   let threads = initial?.threads ?? [];
   let runState = initial?.runState ?? null;
   const messages = initial?.messages ?? [];
+  let turns = initial?.turns ?? [];
 
   const calls = {
     setActiveThread: vi.fn((threadId: string | null) => {
@@ -112,6 +116,9 @@ function createBackendHarness(initial?: {
     get messages() {
       return messages.filter((message) => !activeThreadId || message);
     },
+    get turns() {
+      return turns;
+    },
     setActiveThread: calls.setActiveThread,
     ensureViewer: vi.fn(async () => {}),
     createThread: calls.createThread,
@@ -158,10 +165,33 @@ function createPersistenceHarness(): PersistencePort & {
   };
 }
 
+function createTurnApiHarness(): TurnApiPort & {
+  calls: {
+    submitTurn: ReturnType<typeof vi.fn>;
+    cancelRun: ReturnType<typeof vi.fn>;
+  };
+} {
+  const calls = {
+    submitTurn: vi.fn(async (payload) => ({
+      turnId: payload.turnId,
+      humanMessageId: payload.humanMessageId,
+      threadId: "lg-thread-1",
+      runId: "run-1",
+    })),
+    cancelRun: vi.fn(async () => ({ status: "cancelled" as const })),
+  };
+  return {
+    calls,
+    submitTurn: calls.submitTurn,
+    cancelRun: calls.cancelRun,
+  };
+}
+
 function createStreamHarness(initial?: Partial<StreamState>): {
   useStream: UseStreamAdapter;
   calls: {
     switchThread: ReturnType<typeof vi.fn>;
+    joinStream: ReturnType<typeof vi.fn>;
     submit: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
   };
@@ -178,6 +208,7 @@ function createStreamHarness(initial?: Partial<StreamState>): {
     error: null,
     interrupts: [],
     switchThread: vi.fn(),
+    joinStream: vi.fn(),
     submit: vi.fn(),
     stop: vi.fn(),
     ...initial,
@@ -196,6 +227,7 @@ function createStreamHarness(initial?: Partial<StreamState>): {
       publish();
       return threadId;
     }),
+    joinStream: vi.fn(async () => {}),
     submit: vi.fn(async () => {}),
     stop: vi.fn(() => {
       callbacks.onStop?.();
@@ -205,6 +237,7 @@ function createStreamHarness(initial?: Partial<StreamState>): {
   snapshot = {
     ...snapshot,
     switchThread: calls.switchThread,
+    joinStream: calls.joinStream,
     submit: calls.submit,
     stop: calls.stop,
   };
@@ -261,6 +294,7 @@ describe("useChatOrchestrator streaming contract", () => {
     const backend = createBackendHarness();
     const persistence = createPersistenceHarness();
     const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
 
     const { result } = renderHook(() =>
       useChatOrchestrator({
@@ -268,6 +302,7 @@ describe("useChatOrchestrator streaming contract", () => {
         persistence,
         useStream: stream.useStream,
         authToken: "token",
+        turnApi,
       }),
     );
 
@@ -276,16 +311,17 @@ describe("useChatOrchestrator streaming contract", () => {
     });
 
     expect(backend.calls.createThread).toHaveBeenCalledTimes(1);
-    expect(backend.calls.appendUserMessage).toHaveBeenCalledWith(
-      "thread-1",
-      "Check Survey No. 45/2",
-    );
-    expect(backend.calls.setRunning).toHaveBeenCalledWith("thread-1");
-    expect(stream.calls.switchThread).toHaveBeenCalledWith(null);
-    expect(stream.calls.submit).toHaveBeenCalledWith(
-      { messages: [{ type: "human", content: "Check Survey No. 45/2" }] },
-      { streamResumable: true, onDisconnect: "continue" },
-    );
+    expect(turnApi.calls.submitTurn).toHaveBeenCalledWith({
+      turnId: expect.any(String),
+      humanMessageId: expect.any(String),
+      uiThreadId: "thread-1",
+      content: "Check Survey No. 45/2",
+    });
+    expect(backend.calls.appendUserMessage).not.toHaveBeenCalled();
+    expect(backend.calls.setRunning).not.toHaveBeenCalled();
+    expect(stream.calls.submit).not.toHaveBeenCalled();
+    expect(stream.calls.switchThread).toHaveBeenLastCalledWith("lg-thread-1");
+    expect(stream.calls.joinStream).toHaveBeenCalledWith("run-1");
 
     await waitFor(() => {
       expect(result.current.selectedThread?._id).toBe("thread-1");
@@ -371,6 +407,101 @@ describe("useChatOrchestrator streaming contract", () => {
     ]);
   });
 
+  test("keeps every live Assistant Message in backend position order", async () => {
+    const backend = createBackendHarness();
+    const persistence = createPersistenceHarness();
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        persistence,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.submitMessage("Check Baner");
+    });
+    stream.setState({
+      isLoading: true,
+      messages: [
+        {
+          type: "ai",
+          id: "ai-progress",
+          content: "Researching",
+          messagePosition: 0,
+        },
+        {
+          type: "ai",
+          id: "ai-final",
+          content: "Final assessment",
+          messagePosition: 1,
+        },
+      ],
+    });
+
+    expect(
+      result.current.turns[0]?.assistantMessages.map((message) => message.id),
+    ).toEqual(["ai-progress", "ai-final"]);
+  });
+
+  test("merges optimistic user prompts with persisted replies in chronological order", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 300,
+        } as Thread,
+      ],
+      messages: [
+        {
+          role: "assistant",
+          content: "First answer",
+          createdAt: Date.now() + 100_000,
+        },
+      ],
+    });
+    backend.appendUserMessage = vi.fn(async () => {});
+    const persistence = createPersistenceHarness();
+    const stream = createStreamHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        persistence,
+        useStream: stream.useStream,
+        authToken: "token",
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?._id).toBe("thread-1");
+    });
+
+    await act(async () => {
+      await result.current.submitMessage("First question");
+    });
+
+    await act(async () => {
+      await result.current.submitMessage("Second question");
+    });
+
+    expect(result.current.messages.map((message) => message.content)).toEqual([
+      "First question",
+      "Second question",
+      "First answer",
+    ]);
+  });
+
   test("mirrors final assistant messages and marks the thread idle on finish", async () => {
     const backend = createBackendHarness();
     const persistence = createPersistenceHarness();
@@ -406,6 +537,39 @@ describe("useChatOrchestrator streaming contract", () => {
     });
   });
 
+  test("does not finalize backend-owned turns from the browser", async () => {
+    const backend = createBackendHarness();
+    const persistence = createPersistenceHarness();
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        persistence,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.submitMessage("Check Hinjewadi");
+    });
+    stream.emitFinish({
+      values: {
+        messages: [
+          { type: "human", id: "human-1", content: "Check Hinjewadi" },
+          { type: "ai", id: "ai-final", content: "Final answer" },
+        ],
+      },
+    });
+
+    await act(async () => {});
+    expect(backend.calls.syncAssistantMessages).not.toHaveBeenCalled();
+    expect(backend.calls.setIdle).not.toHaveBeenCalled();
+  });
+
   test("marks the selected thread error with the stream error message", async () => {
     const backend = createBackendHarness();
     const persistence = createPersistenceHarness();
@@ -430,6 +594,36 @@ describe("useChatOrchestrator streaming contract", () => {
       expect(backend.calls.setError).toHaveBeenCalledWith("thread-1", "LangGraph failed");
       expect(result.current.statusNote).toBe("LangGraph failed");
     });
+  });
+
+  test("stops the backend run before closing the local stream", async () => {
+    const backend = createBackendHarness();
+    const persistence = createPersistenceHarness();
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        persistence,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.submitMessage("Check Kothrud");
+    });
+    await act(async () => {
+      await result.current.stop();
+    });
+
+    expect(turnApi.calls.cancelRun).toHaveBeenCalledWith("lg-thread-1", "run-1");
+    expect(stream.calls.stop).toHaveBeenCalledTimes(1);
+    expect(
+      turnApi.calls.cancelRun.mock.invocationCallOrder[0],
+    ).toBeLessThan(stream.calls.stop.mock.invocationCallOrder[0]);
   });
 
   test("clears local linkage and starts fresh when the stream reports interrupts", async () => {

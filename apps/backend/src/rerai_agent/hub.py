@@ -47,6 +47,7 @@ class AgentHubConfig:
     subagent_model: str = "nvidia/nemotron-3-nano-30b-a3b:free"
     embedding_model: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    embedding_base_url: str | None = None
     memory_files: Sequence[str | Path] = field(default_factory=_default_memory_files)
     skills_dir: str | Path | None = field(
         default_factory=lambda: str(_DEFAULT_SKILLS_DIR)
@@ -92,6 +93,8 @@ class AgentHubConfig:
             or defaults["embedding_model"].default,
             openrouter_base_url=os.environ.get("OPENROUTER_BASE_URL")
             or defaults["openrouter_base_url"].default,
+            embedding_base_url=os.environ.get("EMBEDDING_BASE_URL")
+            or None,
             setup_db=setup_db,
         )
 
@@ -232,6 +235,7 @@ class AgentHub(AbstractAsyncContextManager):
                 chat_model=self.config.chat_model,
                 embedding_model=self.config.embedding_model,
                 base_url=self.config.openrouter_base_url,
+                embedding_base_url=self.config.embedding_base_url,
             )
         return self._model_provider
 

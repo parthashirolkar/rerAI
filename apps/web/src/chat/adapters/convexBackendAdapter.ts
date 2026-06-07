@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@/lib/convexApi";
 import type { Id } from "@convex-generated/dataModel";
-import type { ChatMessage } from "@/lib/messages";
+import type { ChatMessage, ConversationTurn } from "@/lib/messages";
 import type { BackendPort, Thread, Viewer, RunState } from "../ports";
 
 export function useConvexBackendAdapter(viewerReady: boolean): BackendPort {
@@ -21,22 +21,53 @@ export function useConvexBackendAdapter(viewerReady: boolean): BackendPort {
 
   const viewer = useQuery(api.users.getCurrent, viewerReady ? {} : "skip");
   const threadsResult = useQuery(api.threads.listMine, viewerReady ? {} : "skip");
-  const runState = useQuery(
-    api.runState.getForThread,
+  const paginatedTurns = usePaginatedQuery(
+    api.turns.listByThread,
     viewerReady && activeThreadId ? { threadId: activeThreadId as Id<"uiThreads"> } : "skip",
-  );
-  const paginatedMessages = usePaginatedQuery(
-    api.messages.listByThread,
-    viewerReady && activeThreadId ? { threadId: activeThreadId as Id<"uiThreads"> } : "skip",
-    { initialNumItems: 50 },
+    { initialNumItems: 20 },
   );
 
   const threads = useMemo(() => (threadsResult ?? []) as Thread[], [threadsResult]);
 
-  const messages = useMemo(() => {
-    const results = (paginatedMessages.results ?? []) as ChatMessage[];
-    return [...results].sort((left, right) => left.createdAt - right.createdAt);
-  }, [paginatedMessages.results]);
+  const turns = useMemo(() => {
+    const results = (paginatedTurns.results ?? []) as ConversationTurn[];
+    return [...results].sort(
+      (left, right) => left.turnPosition - right.turnPosition,
+    );
+  }, [paginatedTurns.results]);
+  const messages = useMemo<ChatMessage[]>(
+    () =>
+      turns.flatMap((turn) => [
+        {
+          id: turn.turnId,
+          role: "user" as const,
+          content: turn.userContent,
+          createdAt: turn.createdAt,
+        },
+        ...turn.assistantMessages.map((message) => ({
+          id: message.id,
+          langgraphMessageId: message.langgraphMessageId,
+          role: "assistant" as const,
+          content: `${message.canonicalContent}${message.displayOnlyContent ?? ""}`,
+          createdAt: message.createdAt,
+          messagePosition: message.messagePosition,
+        })),
+      ]),
+    [turns],
+  );
+  const runState = useMemo<RunState | null>(() => {
+    const latest = turns.at(-1);
+    if (!latest) {
+      return null;
+    }
+    if (latest.status === "pending" || latest.status === "running") {
+      return { status: "running" };
+    }
+    if (latest.status === "failed") {
+      return { status: "error", errorMessage: latest.errorMessage };
+    }
+    return { status: "idle" };
+  }, [turns]);
 
   const ensureViewerFn = useCallback(async () => {
     await ensureViewer({});
@@ -121,8 +152,9 @@ export function useConvexBackendAdapter(viewerReady: boolean): BackendPort {
     () => ({
       viewer: viewer as Viewer | null | undefined,
       threads,
-      runState: runState as RunState | null | undefined,
+      runState,
       messages,
+      turns,
       setActiveThread,
       ensureViewer: ensureViewerFn,
       createThread: createThreadFn,
@@ -140,6 +172,7 @@ export function useConvexBackendAdapter(viewerReady: boolean): BackendPort {
       threads,
       runState,
       messages,
+      turns,
       setActiveThread,
       ensureViewerFn,
       createThreadFn,

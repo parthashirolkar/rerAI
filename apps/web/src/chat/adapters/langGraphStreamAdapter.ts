@@ -13,7 +13,7 @@ export const useLangGraphStreamAdapter: UseStreamAdapter = (
     client,
     assistantId: ASSISTANT_ID,
     threadId,
-    fetchStateHistory: true,
+    fetchStateHistory: false,
     reconnectOnMount: true,
     onThreadId(nextThreadId) {
       callbacks.onThreadId?.(nextThreadId);
@@ -34,20 +34,27 @@ export const useLangGraphStreamAdapter: UseStreamAdapter = (
 
   return useMemo(
     () => ({
-      messages: rawStream.messages,
+      messages: rawStream.messages.map((message, index) => ({
+        data: message,
+        messagePosition: rawStream.getMessagesMetadata(message, index)
+          ?.streamMetadata?.message_position,
+      })),
       isLoading: rawStream.isLoading,
       error: rawStream.error instanceof Error ? rawStream.error : null,
       interrupts: rawStream.interrupts,
       switchThread: rawStream.switchThread,
+      joinStream: rawStream.joinStream,
       submit: rawStream.submit,
       stop: rawStream.stop,
     }),
     [
       rawStream.messages,
+      rawStream.getMessagesMetadata,
       rawStream.isLoading,
       rawStream.error,
       rawStream.interrupts,
       rawStream.switchThread,
+      rawStream.joinStream,
       rawStream.submit,
       rawStream.stop,
     ],

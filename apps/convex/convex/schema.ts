@@ -54,6 +54,48 @@ export default defineSchema({
     .index("by_threadId_and_createdAt", ["threadId", "createdAt"])
     .index("by_threadId_and_langgraphMessageId", ["threadId", "langgraphMessageId"])
     .index("by_userId_and_createdAt", ["userId", "createdAt"]),
+  conversationTurns: defineTable({
+    userId: v.id("users"),
+    uiThreadId: v.id("uiThreads"),
+    turnId: v.string(),
+    humanMessageId: v.string(),
+    content: v.string(),
+    turnPosition: v.number(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    langgraphThreadId: v.optional(v.string()),
+    langgraphRunId: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
+    finalizationId: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    terminalAt: v.optional(v.number()),
+  })
+    .index("by_turnId", ["turnId"])
+    .index("by_uiThreadId_and_turnPosition", ["uiThreadId", "turnPosition"]),
+  assistantMessages: defineTable({
+    userId: v.id("users"),
+    uiThreadId: v.id("uiThreads"),
+    turnId: v.id("conversationTurns"),
+    messageId: v.string(),
+    langgraphMessageId: v.optional(v.string()),
+    messagePosition: v.number(),
+    canonicalContent: v.string(),
+    displayOnlyContent: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_turnId_and_messagePosition", ["turnId", "messagePosition"])
+    .index("by_turnId_and_messageId", ["turnId", "messageId"])
+    .index("by_uiThreadId_and_messagePosition", [
+      "uiThreadId",
+      "messagePosition",
+    ]),
   threadRunState: defineTable({
     threadId: v.id("uiThreads"),
     userId: v.id("users"),

@@ -18,6 +18,27 @@ class ConvexAuthClient(Protocol):
 
     async def owns_langgraph_thread(self, token: str, thread_id: str) -> bool: ...
 
+    async def ensure_turn(
+        self,
+        token: str,
+        *,
+        ui_thread_id: str,
+        turn_id: str,
+        human_message_id: str,
+        content: str,
+    ) -> dict[str, Any]: ...
+
+    async def mark_turn_running(
+        self,
+        token: str,
+        *,
+        turn_id: str,
+        langgraph_thread_id: str,
+        langgraph_run_id: str,
+    ) -> dict[str, Any]: ...
+
+    async def finalize_turn(self, payload: dict[str, Any]) -> None: ...
+
 
 def _trim_trailing_slash(value: str) -> str:
     return value.rstrip("/")
@@ -32,8 +53,20 @@ def _default_convex_url() -> str:
 
 
 class ConvexHttpClient:
-    def __init__(self, convex_url: str | None = None) -> None:
+    def __init__(
+        self,
+        convex_url: str | None = None,
+        *,
+        site_url: str | None = None,
+        service_token: str | None = None,
+    ) -> None:
         self.convex_url = _trim_trailing_slash(convex_url or _default_convex_url())
+        self.site_url = _trim_trailing_slash(
+            site_url or os.getenv("CONVEX_SITE_URL", "").strip()
+        )
+        self.service_token = (
+            service_token or os.getenv("CONVEX_SERVICE_TOKEN", "").strip()
+        )
 
     async def _call(
         self, endpoint: str, token: str, path: str, args: dict[str, Any] | None = None
@@ -84,3 +117,58 @@ class ConvexHttpClient:
             {"langgraphThreadId": thread_id},
         )
         return isinstance(payload, dict) and payload.get("langgraphThreadId") == thread_id
+
+    async def ensure_turn(
+        self,
+        token: str,
+        *,
+        ui_thread_id: str,
+        turn_id: str,
+        human_message_id: str,
+        content: str,
+    ) -> dict[str, Any]:
+        payload = await self.mutation(
+            token,
+            "backend:ensureTurn",
+            {
+                "uiThreadId": ui_thread_id,
+                "turnId": turn_id,
+                "humanMessageId": human_message_id,
+                "content": content,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Convex did not return a Conversation Turn")
+        return payload
+
+    async def mark_turn_running(
+        self,
+        token: str,
+        *,
+        turn_id: str,
+        langgraph_thread_id: str,
+        langgraph_run_id: str,
+    ) -> dict[str, Any]:
+        payload = await self.mutation(
+            token,
+            "backend:markTurnRunning",
+            {
+                "turnId": turn_id,
+                "langgraphThreadId": langgraph_thread_id,
+                "langgraphRunId": langgraph_run_id,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Convex did not return a running Conversation Turn")
+        return payload
+
+    async def finalize_turn(self, payload: dict[str, Any]) -> None:
+        if not self.site_url or not self.service_token:
+            raise RuntimeError("Convex service finalization is not configured")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{self.site_url}/service/turns/finalize",
+                headers={"x-rerai-service-token": self.service_token},
+                json=payload,
+            )
+        response.raise_for_status()

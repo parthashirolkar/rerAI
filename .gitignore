@@ -15,6 +15,7 @@ wheels/
 # Data artifacts
 data/chroma_db/
 data/pdfs/*.pdf
+data/skills/
 .langgraph_api/
 apps/backend/.langgraph_api/
 
@@ -42,3 +43,4 @@ apps/backend/src/**/__pycache__/
 # Tool caches
 .ruff_cache/
 apps/*/.ruff_cache/
+.agents/

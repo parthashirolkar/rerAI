@@ -95,6 +95,36 @@ export const remove = mutation({
 
     while (true) {
       const batch = await ctx.db
+        .query("assistantMessages")
+        .withIndex("by_uiThreadId_and_messagePosition", (q) =>
+          q.eq("uiThreadId", thread._id),
+        )
+        .take(128);
+      if (batch.length === 0) {
+        break;
+      }
+      for (const message of batch) {
+        await ctx.db.delete(message._id);
+      }
+    }
+
+    while (true) {
+      const batch = await ctx.db
+        .query("conversationTurns")
+        .withIndex("by_uiThreadId_and_turnPosition", (q) =>
+          q.eq("uiThreadId", thread._id),
+        )
+        .take(128);
+      if (batch.length === 0) {
+        break;
+      }
+      for (const turn of batch) {
+        await ctx.db.delete(turn._id);
+      }
+    }
+
+    while (true) {
+      const batch = await ctx.db
         .query("uiMessages")
         .withIndex("by_threadId_and_createdAt", (q) => q.eq("threadId", thread._id))
         .take(128);

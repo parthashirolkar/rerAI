@@ -7,6 +7,26 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: number;
+  messagePosition?: number;
+};
+
+export type AssistantMessage = {
+  id: string;
+  langgraphMessageId?: string;
+  messagePosition: number;
+  canonicalContent: string;
+  displayOnlyContent?: string;
+  createdAt: number;
+};
+
+export type ConversationTurn = {
+  turnId: string;
+  turnPosition: number;
+  userContent: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  assistantMessages: AssistantMessage[];
+  createdAt: number;
+  errorMessage?: string;
 };
 
 export type AssistantMirrorPayload = {
@@ -24,6 +44,7 @@ type MessageLike = {
   type?: string;
   createdAt?: number;
   _creationTime?: number;
+  messagePosition?: number;
   getType?: () => string;
   _getType?: () => string;
   data?: MessageLike;
@@ -151,6 +172,12 @@ function normalizeSingleMessage(raw: unknown): ChatMessage | null {
   if (message.langgraphMessageId) {
     normalized.langgraphMessageId = message.langgraphMessageId;
   }
+  const nested = getNestedMessage(message);
+  if (typeof message.messagePosition === "number") {
+    normalized.messagePosition = message.messagePosition;
+  } else if (typeof nested?.messagePosition === "number") {
+    normalized.messagePosition = nested.messagePosition;
+  }
 
   return normalized;
 }
@@ -225,4 +252,39 @@ export function selectLiveAssistantMessage(
   }
 
   return null;
+}
+
+export function selectLiveAssistantMessages(
+  persistedMessages: ChatMessage[],
+  streamMessages: ChatMessage[],
+): ChatMessage[] {
+  const persistedAssistantIds = new Set(
+    persistedMessages
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.id ?? message.langgraphMessageId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const persistedAssistantContent = new Set(
+    persistedMessages
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.content.trim())
+      .filter(Boolean),
+  );
+
+  return streamMessages
+    .filter((message) => {
+      if (message.role !== "assistant" || !message.content.trim()) {
+        return false;
+      }
+      const messageId = message.id ?? message.langgraphMessageId;
+      if (messageId) {
+        return !persistedAssistantIds.has(messageId);
+      }
+      return !persistedAssistantContent.has(message.content.trim());
+    })
+    .sort(
+      (left, right) =>
+        (left.messagePosition ?? Number.MAX_SAFE_INTEGER) -
+        (right.messagePosition ?? Number.MAX_SAFE_INTEGER),
+    );
 }

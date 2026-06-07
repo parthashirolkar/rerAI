@@ -6,7 +6,7 @@ function trimTrailingSlash(value: string) {
   return value.replace(/\/$/, "");
 }
 
-function resolveBackendUrl() {
+export function resolveBackendUrl() {
   const backendUrl = import.meta.env.VITE_BACKEND_URL?.trim();
   if (!backendUrl) {
     throw new Error("Missing VITE_BACKEND_URL");

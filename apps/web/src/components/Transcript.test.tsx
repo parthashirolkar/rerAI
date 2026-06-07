@@ -49,6 +49,63 @@ describe("Transcript", () => {
     expect(screen.queryByText("How can I help?")).not.toBeInTheDocument();
   });
 
+  test("renders complete turns by explicit position with one Assistant Response", () => {
+    const { container } = render(
+      <Transcript
+        hasMessages
+        isStreaming={false}
+        showThinking={false}
+        messages={[]}
+        turns={[
+          {
+            turnId: "turn-2",
+            turnPosition: 1,
+            userContent: "Second question",
+            status: "completed",
+            createdAt: 100,
+            assistantMessages: [
+              {
+                id: "ai-2a",
+                messagePosition: 0,
+                canonicalContent: "Second progress",
+                createdAt: 101,
+              },
+              {
+                id: "ai-2b",
+                messagePosition: 1,
+                canonicalContent: "Second answer",
+                createdAt: 102,
+              },
+            ],
+          },
+          {
+            turnId: "turn-1",
+            turnPosition: 0,
+            userContent: "First question",
+            status: "completed",
+            createdAt: 300,
+            assistantMessages: [
+              {
+                id: "ai-1",
+                messagePosition: 0,
+                canonicalContent: "First answer",
+                createdAt: 400,
+              },
+            ],
+          },
+        ]}
+        sampleQueries={samples}
+        onUseSample={vi.fn()}
+      />,
+    );
+
+    const text = container.textContent ?? "";
+    expect(text.indexOf("First question")).toBeLessThan(text.indexOf("First answer"));
+    expect(text.indexOf("First answer")).toBeLessThan(text.indexOf("Second question"));
+    expect(text.indexOf("Second progress")).toBeLessThan(text.indexOf("Second answer"));
+    expect(screen.getAllByTestId("assistant-response")).toHaveLength(2);
+  });
+
   test("shows thinking indicator only when requested", () => {
     const { container, rerender } = render(
       <Transcript

@@ -10,6 +10,7 @@ export function createMockStreamAdapter(
     error: null,
     interrupts: [],
     switchThread: () => {},
+    joinStream: async () => {},
     submit: async () => {},
     stop: () => {},
     ...overrides,
@@ -21,7 +22,9 @@ export function useMockStreamAdapter(
   callbacks: StreamCallbacks,
 ): StreamState {
   const finishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [state, setState] = useState<Omit<StreamState, "switchThread" | "submit" | "stop">>({
+  const [state, setState] = useState<
+    Omit<StreamState, "switchThread" | "joinStream" | "submit" | "stop">
+  >({
     messages: [],
     isLoading: false,
     error: null,
@@ -79,6 +82,7 @@ export function useMockStreamAdapter(
   return {
     ...state,
     switchThread,
+    joinStream: async () => {},
     submit,
     stop,
   };

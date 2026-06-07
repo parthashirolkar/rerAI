@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid5
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import AuthContext, authenticate_request, require_thread_owner
 from .convex import ConvexAuthClient, ConvexHttpClient
+from .finalization import (
+    canonical_assistant_messages,
+    reconcile_assistant_messages,
+    streamed_assistant_messages,
+)
 from .runtime import (
     BackendRuntime,
     GRAPH_ID,
@@ -20,6 +27,8 @@ from .runtime import (
     sse_response,
     thread_payload,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ThreadCreateRequest(BaseModel):
@@ -61,6 +70,23 @@ class StreamRunRequest(BaseModel):
     checkpoint_id: str | None = None
     webhook: str | None = None
     after_seconds: int | None = None
+
+
+class TurnSubmitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    turn_id: str = Field(alias="turnId", min_length=1)
+    human_message_id: str = Field(alias="humanMessageId", min_length=1)
+    ui_thread_id: str = Field(alias="uiThreadId", min_length=1)
+    content: str = Field(min_length=1)
+
+
+TURN_THREAD_NAMESPACE = UUID("8cbd6f64-6c75-4d27-b9dc-aad995ea6bba")
+TURN_RUN_NAMESPACE = UUID("3d778561-9eb2-44d7-b42f-1cc9fc11a809")
+
+
+def _stable_uuid(namespace: UUID, value: str) -> str:
+    return str(uuid5(namespace, value))
 
 
 def _default_database_uri() -> str:
@@ -144,7 +170,127 @@ def create_app(
         await active_runtime.setup()
         app.state.runtime = active_runtime
         app.state.convex_client = active_convex_client
-        yield
+
+        async def deliver_finalization(payload: dict[str, Any]) -> None:
+            outbox_id = str(payload["finalizationId"])
+            try:
+                await active_convex_client.finalize_turn(payload)
+            except Exception as exc:
+                await asyncio.to_thread(
+                    active_runtime.metadata_store.mark_outbox_failed,
+                    outbox_id,
+                    str(exc),
+                )
+                raise
+            await asyncio.to_thread(
+                active_runtime.metadata_store.mark_outbox_delivered,
+                outbox_id,
+            )
+
+        async def finalize_run(
+            run_id: str,
+            thread_id: str,
+            status: str,
+            error: dict[str, Any] | None,
+        ) -> None:
+            run = await asyncio.to_thread(
+                active_runtime.metadata_store.get_run, run_id
+            )
+            if run is None:
+                return
+            turn_id = run.metadata.get("turn_id")
+            human_message_id = run.metadata.get("human_message_id")
+            if not isinstance(turn_id, str) or not isinstance(
+                human_message_id, str
+            ):
+                return
+            try:
+                state = await active_runtime.orchestrator.state(thread_id=thread_id)
+            except Exception:
+                logger.exception(
+                    "Unable to read canonical state during turn finalization",
+                    extra={"run_id": run_id, "thread_id": thread_id},
+                )
+                state = {"values": {"messages": []}}
+            terminal_status = {
+                "completed": "completed",
+                "cancelled": "cancelled",
+                "error": "failed",
+            }.get(status, "failed")
+            canonical_messages = canonical_assistant_messages(
+                state, human_message_id=human_message_id
+            )
+            events = await asyncio.to_thread(
+                active_runtime.metadata_store.list_events, run_id
+            )
+            payload: dict[str, Any] = {
+                "finalizationId": run_id,
+                "turnId": turn_id,
+                "status": terminal_status,
+                "assistantMessages": reconcile_assistant_messages(
+                    canonical_messages,
+                    streamed_assistant_messages(events),
+                    preserve_display_only=terminal_status
+                    in {"failed", "cancelled"},
+                ),
+            }
+            if error and isinstance(error.get("message"), str):
+                payload["errorMessage"] = error["message"]
+            await asyncio.to_thread(
+                active_runtime.metadata_store.enqueue_outbox,
+                run_id,
+                payload,
+            )
+            await deliver_finalization(payload)
+
+        active_runtime.orchestrator.set_terminal_callback(finalize_run)
+        orphaned_runs = await asyncio.to_thread(
+            active_runtime.metadata_store.list_running_runs
+        )
+        for run in orphaned_runs:
+            error = {"message": "Backend restarted before the run completed"}
+            await asyncio.to_thread(
+                active_runtime.metadata_store.finish_run,
+                run.run_id,
+                status="error",
+                error=error,
+            )
+            await finalize_run(run.run_id, run.thread_id, "error", error)
+
+        pending = await asyncio.to_thread(
+            active_runtime.metadata_store.list_pending_outbox
+        )
+        for item in pending:
+            try:
+                await deliver_finalization(item["payload"])
+            except Exception:
+                logger.exception(
+                    "Unable to replay turn finalization",
+                    extra={"outbox_id": item["outbox_id"]},
+                )
+
+        async def replay_outbox() -> None:
+            while True:
+                await asyncio.sleep(5)
+                items = await asyncio.to_thread(
+                    active_runtime.metadata_store.list_pending_outbox
+                )
+                for item in items:
+                    try:
+                        await deliver_finalization(item["payload"])
+                    except Exception:
+                        logger.exception(
+                            "Unable to retry turn finalization",
+                            extra={"outbox_id": item["outbox_id"]},
+                        )
+
+        replay_task = asyncio.create_task(replay_outbox())
+        try:
+            yield
+        finally:
+            replay_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await replay_task
 
     app = FastAPI(title="rerAI Backend", version="0.1.0", lifespan=lifespan)
 
@@ -210,6 +356,92 @@ def create_app(
             return await get_runtime(request).get_schemas(assistant_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/chat/turns")
+    async def submit_turn(
+        payload: TurnSubmitRequest, request: Request
+    ) -> dict[str, str]:
+        auth = get_auth(request)
+        content = payload.content.strip()
+        if not content:
+            raise HTTPException(status_code=422, detail="Content cannot be empty")
+
+        try:
+            turn = await request.app.state.convex_client.ensure_turn(
+                auth.token,
+                ui_thread_id=payload.ui_thread_id,
+                turn_id=payload.turn_id,
+                human_message_id=payload.human_message_id,
+                content=content,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail="Unable to persist Conversation Turn"
+            ) from exc
+        if (
+            turn.get("uiThreadId") != payload.ui_thread_id
+            or turn.get("humanMessageId") != payload.human_message_id
+            or turn.get("content") != content
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Conversation Turn '{payload.turn_id}' already exists with different input",
+            )
+
+        runtime = get_runtime(request)
+        thread_id = _stable_uuid(TURN_THREAD_NAMESPACE, payload.ui_thread_id)
+        run_id = _stable_uuid(TURN_RUN_NAMESPACE, payload.turn_id)
+        await asyncio.to_thread(
+            runtime.metadata_store.create_thread,
+            thread_id,
+            metadata=user_scoped_metadata(
+                auth,
+                {
+                    "ui_thread_id": payload.ui_thread_id,
+                },
+            ),
+            if_exists="do_nothing",
+        )
+        try:
+            await request.app.state.convex_client.mark_turn_running(
+                auth.token,
+                turn_id=payload.turn_id,
+                langgraph_thread_id=thread_id,
+                langgraph_run_id=run_id,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail="Unable to start Conversation Turn"
+            ) from exc
+        subscription = await runtime.orchestrator.start(
+            thread_id=thread_id,
+            assistant_id=GRAPH_ID,
+            run_id=run_id,
+            payload={
+                "input": {
+                    "messages": [
+                        {
+                            "type": "human",
+                            "id": payload.human_message_id,
+                            "content": content,
+                        }
+                    ]
+                },
+                "metadata": {
+                    "turn_id": payload.turn_id,
+                    "human_message_id": payload.human_message_id,
+                    "ui_thread_id": payload.ui_thread_id,
+                },
+                "stream_mode": ["messages-tuple", "values"],
+                "on_disconnect": "continue",
+            },
+        )
+        return {
+            "turn_id": payload.turn_id,
+            "human_message_id": payload.human_message_id,
+            "thread_id": subscription.thread_id,
+            "run_id": subscription.run_id,
+        }
 
     @app.post("/threads")
     async def create_thread(
@@ -418,6 +650,33 @@ def create_app(
             thread_id=thread_id,
             run_id=run_id,
         )
+
+    @app.post("/threads/{thread_id}/runs/{run_id}/cancel")
+    async def cancel_run(
+        thread_id: str, run_id: str, request: Request
+    ) -> dict[str, str]:
+        runtime = get_runtime(request)
+        await authorize_thread(request, thread_id)
+        run_record = await asyncio.to_thread(
+            runtime.metadata_store.get_run, run_id
+        )
+        if run_record is None or run_record.thread_id != thread_id:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+        try:
+            status = await runtime.orchestrator.cancel(
+                run_id=run_id, thread_id=thread_id
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"Run '{run_id}' not found"
+            ) from exc
+        return {
+            "status": {
+                "error": "failed",
+                "completed": "completed",
+                "cancelled": "cancelled",
+            }.get(status, "failed")
+        }
 
     return app
 

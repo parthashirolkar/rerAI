@@ -85,13 +85,28 @@ function AuthenticatedApp() {
   const isReady = chat.viewer !== null;
 
   const latestAssistantMarkdown = useMemo(() => {
+    for (let turnIndex = chat.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+      const turn = chat.turns[turnIndex];
+      if (!turn) continue;
+      for (
+        let messageIndex = turn.assistantMessages.length - 1;
+        messageIndex >= 0;
+        messageIndex -= 1
+      ) {
+        const message = turn.assistantMessages[messageIndex];
+        const content = `${message?.canonicalContent ?? ""}${message?.displayOnlyContent ?? ""}`;
+        if (content) {
+          return content;
+        }
+      }
+    }
     for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
       if (chat.messages[index]?.role === "assistant") {
         return chat.messages[index]?.content ?? "";
       }
     }
     return "";
-  }, [chat.messages]);
+  }, [chat.messages, chat.turns]);
 
   const report = useMemo(
     () => parsePermitReport(latestAssistantMarkdown),
@@ -309,10 +324,11 @@ function AuthenticatedApp() {
           <div className="relative flex min-h-0 flex-1 overflow-hidden">
             <div className={`flex min-h-0 flex-1 flex-col overflow-hidden ${showReport ? "border-r" : ""}`}>
               <Transcript
-                hasMessages={chat.messages.length > 0}
+                hasMessages={chat.turns.length > 0 || chat.messages.length > 0}
                 isStreaming={chat.isStreaming}
                 showThinking={chat.showThinking}
                 messages={chat.messages}
+                turns={chat.turns}
                 sampleQueries={SAMPLE_QUERIES}
                 onUseSample={(sample) => startTransition(() => setDraft(sample))}
               />

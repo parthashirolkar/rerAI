@@ -1,5 +1,9 @@
 import type { Id } from "@convex-generated/dataModel";
-import type { ChatMessage, AssistantMirrorPayload } from "@/lib/messages";
+import type {
+  ChatMessage,
+  AssistantMirrorPayload,
+  ConversationTurn,
+} from "@/lib/messages";
 
 export type Viewer = {
   name?: string;
@@ -26,6 +30,7 @@ export interface BackendPort {
   threads: Thread[] | undefined;
   runState: RunState | null | undefined;
   messages: ChatMessage[] | undefined;
+  turns?: ConversationTurn[] | undefined;
 
   setActiveThread(threadId: string | null): void;
   ensureViewer(): Promise<void>;
@@ -46,11 +51,33 @@ export interface StreamState {
   error: Error | null;
   interrupts: unknown[];
   switchThread(threadId: string | null): void;
+  joinStream(runId: string): Promise<void>;
   submit(
     payload: { messages: Array<{ type: string; content: string }> },
     options: { streamResumable: boolean; onDisconnect: "continue" },
   ): Promise<void>;
-  stop(): void;
+  stop(): void | Promise<void>;
+}
+
+export type TurnSubmission = {
+  turnId: string;
+  humanMessageId: string;
+  uiThreadId: string;
+  content: string;
+};
+
+export type SubmittedTurn = {
+  turnId: string;
+  humanMessageId: string;
+  threadId: string;
+  runId: string;
+};
+
+export interface TurnApiPort {
+  submitTurn(payload: TurnSubmission): Promise<SubmittedTurn>;
+  cancelRun(threadId: string, runId: string): Promise<{
+    status: "completed" | "failed" | "cancelled";
+  }>;
 }
 
 export interface StreamCallbacks {
@@ -79,6 +106,7 @@ export interface UseChatOrchestratorOptions {
   persistence: PersistencePort;
   useStream: UseStreamAdapter;
   authToken: string | null;
+  turnApi?: TurnApiPort;
 }
 
 export interface ChatOrchestratorState {
@@ -86,6 +114,7 @@ export interface ChatOrchestratorState {
   threads: Thread[];
   selectedThread: Thread | null;
   messages: ChatMessage[];
+  turns: ConversationTurn[];
   runState: RunState | null;
   isStreaming: boolean;
   showThinking: boolean;
@@ -100,5 +129,5 @@ export interface ChatOrchestratorActions {
   createThread(): Promise<void>;
   deleteThread(threadId: string): Promise<void>;
   submitMessage(content: string): Promise<void>;
-  stop(): void;
+  stop(): Promise<void>;
 }
