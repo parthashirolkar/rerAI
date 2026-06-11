@@ -21,18 +21,15 @@ export type AssistantMessage = {
 
 export type ConversationTurn = {
   turnId: string;
+  threadId?: string;
   turnPosition: number;
   userContent: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  langgraphThreadId?: string;
+  langgraphRunId?: string;
   assistantMessages: AssistantMessage[];
   createdAt: number;
   errorMessage?: string;
-};
-
-export type AssistantMirrorPayload = {
-  langgraphMessageId?: string;
-  content: string;
-  createdAt: number;
 };
 
 type MessageLike = {
@@ -48,12 +45,6 @@ type MessageLike = {
   getType?: () => string;
   _getType?: () => string;
   data?: MessageLike;
-};
-
-type ThreadStateLike = {
-  values?: {
-    messages?: unknown;
-  };
 };
 
 type ContentBlock = {
@@ -191,29 +182,6 @@ export function normalizeMessages(raw: unknown[]): ChatMessage[] {
     }
   }
   return result;
-}
-
-export function extractThreadMessages(state: unknown): ChatMessage[] {
-  if (!state || typeof state !== "object") {
-    return [];
-  }
-  const messages = (state as ThreadStateLike).values?.messages;
-  if (!Array.isArray(messages)) {
-    return [];
-  }
-  return normalizeMessages(messages);
-}
-
-export function toAssistantMirrorPayload(
-  messages: ChatMessage[],
-): AssistantMirrorPayload[] {
-  return messages
-    .filter((message) => message.role === "assistant" && message.content.trim().length > 0)
-    .map((message) => ({
-      langgraphMessageId: message.id || message.langgraphMessageId || undefined,
-      content: message.content,
-      createdAt: message.createdAt,
-    }));
 }
 
 export function selectLiveAssistantMessage(

@@ -1,10 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
-  extractThreadMessages,
   normalizeMessages,
   selectLiveAssistantMessage,
   selectLiveAssistantMessages,
-  toAssistantMirrorPayload,
 } from "./messages";
 
 describe("normalizeMessages", () => {
@@ -117,72 +115,6 @@ describe("normalizeMessages", () => {
 
   test("returns empty array for empty input", () => {
     expect(normalizeMessages([])).toEqual([]);
-  });
-});
-
-describe("extractThreadMessages", () => {
-  test("extracts from thread state values", () => {
-    const state = {
-      values: {
-        messages: [
-          { type: "human", content: "hello" },
-          { type: "ai", id: "ai-1", content: "done" },
-          { type: "system", content: "ignore" },
-        ],
-      },
-    };
-
-    const result = extractThreadMessages(state);
-    expect(result).toHaveLength(2);
-    expect(result[0].role).toBe("user");
-    expect(result[1].role).toBe("assistant");
-    expect(result[1].id).toBe("ai-1");
-  });
-
-  test("returns empty for missing values", () => {
-    expect(extractThreadMessages({ values: {} })).toEqual([]);
-    expect(extractThreadMessages(null)).toEqual([]);
-    expect(extractThreadMessages(undefined)).toEqual([]);
-  });
-});
-
-describe("toAssistantMirrorPayload", () => {
-  test("filters to assistant and skips empty", () => {
-    const payload = toAssistantMirrorPayload([
-      { role: "user", content: "hello", createdAt: 100 },
-      { role: "assistant", content: "", createdAt: 200, id: "a1" },
-      { role: "assistant", content: "  ", createdAt: 300, id: "a2" },
-      { role: "assistant", content: "done", createdAt: 400, id: "a3" },
-    ]);
-
-    expect(payload).toHaveLength(1);
-    expect(payload[0]).toEqual({
-      langgraphMessageId: "a3",
-      content: "done",
-      createdAt: 400,
-    });
-  });
-
-  test("strips blank langgraphMessageId", () => {
-    const payload = toAssistantMirrorPayload([
-      { role: "assistant", content: "ok", createdAt: 100, id: "" },
-    ]);
-
-    expect(payload[0].langgraphMessageId).toBeUndefined();
-  });
-
-  test("round-trip preserves fields", () => {
-    const raw = [
-      { type: "ai", id: "lg-1", content: "hello", createdAt: 1000 },
-      { type: "ai", id: "lg-2", content: "world", createdAt: 2000 },
-    ];
-    const normalized = normalizeMessages(raw);
-    const payload = toAssistantMirrorPayload(normalized);
-
-    expect(payload).toEqual([
-      { langgraphMessageId: "lg-1", content: "hello", createdAt: 1000 },
-      { langgraphMessageId: "lg-2", content: "world", createdAt: 2000 },
-    ]);
   });
 });
 

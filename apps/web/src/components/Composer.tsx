@@ -1,16 +1,27 @@
 import { KeyboardEvent, FormEvent, useRef, useCallback, useEffect, useState } from "react";
-import { ArrowUp, Loader2 } from "lucide-react";
+import { ArrowUp, Loader2, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 type ComposerProps = {
   busy: boolean;
+  canStop?: boolean;
   draft: string;
+  isStopping?: boolean;
   onChange: (value: string) => void;
+  onStop?: () => Promise<void>;
   onSubmit: (value: string) => Promise<void>;
 };
 
-export function Composer({ busy, draft, onChange, onSubmit }: ComposerProps) {
+export function Composer({
+  busy,
+  canStop = false,
+  draft,
+  isStopping = false,
+  onChange,
+  onStop,
+  onSubmit,
+}: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [lineCount, setLineCount] = useState(1);
   const [isExpanding, setIsExpanding] = useState(false);
@@ -78,19 +89,36 @@ export function Composer({ busy, draft, onChange, onSubmit }: ComposerProps) {
             rows={1}
             value={draft}
           />
-          <Button
-            size="icon-sm"
-            aria-label="Send message"
-            disabled={busy || !draft.trim()}
-            type="submit"
-            className={multiLine ? "mb-0.5" : ""}
-          >
-            {busy ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <ArrowUp className="size-4" />
-            )}
-          </Button>
+          {canStop ? (
+            <Button
+              size="icon-sm"
+              aria-label="Stop generating"
+              disabled={isStopping}
+              type="button"
+              className={multiLine ? "mb-0.5" : ""}
+              onClick={() => void onStop?.()}
+            >
+              {isStopping ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Square className="size-3.5 fill-current" />
+              )}
+            </Button>
+          ) : (
+            <Button
+              size="icon-sm"
+              aria-label="Send message"
+              disabled={busy || !draft.trim()}
+              type="submit"
+              className={multiLine ? "mb-0.5" : ""}
+            >
+              {busy ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <ArrowUp className="size-4" />
+              )}
+            </Button>
+          )}
         </div>
         <p className="mt-1.5 text-center text-[10px] text-muted-foreground/60">
           Shift+Enter for new line

@@ -107,6 +107,9 @@ class RunOrchestrator:
         self._terminal_callback: (
             Callable[[str, str, str, dict[str, Any] | None], Awaitable[None]] | None
         ) = None
+        self._progress_callback: (
+            Callable[[str, str], Awaitable[None]] | None
+        ) = None
 
     def set_terminal_callback(
         self,
@@ -115,6 +118,12 @@ class RunOrchestrator:
         ],
     ) -> None:
         self._terminal_callback = callback
+
+    def set_progress_callback(
+        self,
+        callback: Callable[[str, str], Awaitable[None]],
+    ) -> None:
+        self._progress_callback = callback
 
     async def start(
         self,
@@ -341,6 +350,8 @@ class RunOrchestrator:
             event=event,
             data=data,
         )
+        if event == "messages" and self._progress_callback is not None:
+            await self._progress_callback(run_id, thread_id)
         active = self._active_runs.get(run_id)
         if active is None:
             return

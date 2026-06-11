@@ -70,6 +70,12 @@ export const ensureTurn = mutation({
       )
       .order("desc")
       .first();
+    if (
+      latestTurn?.status === "pending" ||
+      latestTurn?.status === "running"
+    ) {
+      throw new Error("Conversation already has an active turn");
+    }
     const now = Date.now();
     const turnId = await ctx.db.insert("conversationTurns", {
       userId,

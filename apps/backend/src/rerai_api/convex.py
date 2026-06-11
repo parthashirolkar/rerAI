@@ -39,6 +39,12 @@ class ConvexAuthClient(Protocol):
 
     async def finalize_turn(self, payload: dict[str, Any]) -> None: ...
 
+    async def project_turn(self, payload: dict[str, Any]) -> None: ...
+
+    async def list_stale_pending_turns(self, *, cutoff_timestamp: int) -> list[dict[str, Any]]: ...
+
+    async def list_invalid_running_turns(self) -> list[dict[str, Any]]: ...
+
 
 def _trim_trailing_slash(value: str) -> str:
     return value.rstrip("/")
@@ -172,3 +178,37 @@ class ConvexHttpClient:
                 json=payload,
             )
         response.raise_for_status()
+
+    async def project_turn(self, payload: dict[str, Any]) -> None:
+        if not self.site_url or not self.service_token:
+            raise RuntimeError("Convex service projection is not configured")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{self.site_url}/service/turns/project",
+                headers={"x-rerai-service-token": self.service_token},
+                json=payload,
+            )
+        response.raise_for_status()
+
+    async def list_stale_pending_turns(self, *, cutoff_timestamp: int) -> list[dict[str, Any]]:
+        if not self.site_url or not self.service_token:
+            raise RuntimeError("Convex service list stale pending is not configured")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{self.site_url}/service/turns/listStalePending",
+                headers={"x-rerai-service-token": self.service_token},
+                json={"cutoffTimestamp": cutoff_timestamp},
+            )
+        response.raise_for_status()
+        return response.json()
+
+    async def list_invalid_running_turns(self) -> list[dict[str, Any]]:
+        if not self.site_url or not self.service_token:
+            raise RuntimeError("Convex service list invalid running is not configured")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{self.site_url}/service/turns/listInvalidRunning",
+                headers={"x-rerai-service-token": self.service_token},
+            )
+        response.raise_for_status()
+        return response.json()

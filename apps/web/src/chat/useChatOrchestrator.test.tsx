@@ -1,12 +1,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { describe, expect, test, vi } from "vitest";
 
 import { useChatOrchestrator } from "./useChatOrchestrator";
 import type {
   BackendPort,
-  PersistencePort,
-  RunState,
   StreamCallbacks,
   StreamState,
   Thread,
@@ -22,28 +20,19 @@ type BackendHarness = BackendPort & {
     setActiveThread: ReturnType<typeof vi.fn>;
     createThread: ReturnType<typeof vi.fn>;
     removeThread: ReturnType<typeof vi.fn>;
-    attachLangGraphThread: ReturnType<typeof vi.fn>;
-    detachLangGraphThread: ReturnType<typeof vi.fn>;
-    appendUserMessage: ReturnType<typeof vi.fn>;
-    syncAssistantMessages: ReturnType<typeof vi.fn>;
-    setRunning: ReturnType<typeof vi.fn>;
-    setError: ReturnType<typeof vi.fn>;
-    setIdle: ReturnType<typeof vi.fn>;
   };
 };
 
 function createBackendHarness(initial?: {
   viewer?: Viewer | null;
   threads?: Thread[];
-  runState?: RunState | null;
   messages?: ChatMessage[];
   turns?: ConversationTurn[];
 }): BackendHarness {
   let activeThreadId: string | null = null;
   let threads = initial?.threads ?? [];
-  let runState = initial?.runState ?? null;
   const messages = initial?.messages ?? [];
-  let turns = initial?.turns ?? [];
+  const turns = initial?.turns ?? [];
 
   const calls = {
     setActiveThread: vi.fn((threadId: string | null) => {
@@ -61,45 +50,6 @@ function createBackendHarness(initial?: {
     removeThread: vi.fn(async (threadId: string) => {
       threads = threads.filter((thread) => thread._id !== threadId);
     }),
-    attachLangGraphThread: vi.fn(async (threadId: string, langgraphThreadId: string) => {
-      threads = threads.map((thread) =>
-        thread._id === threadId ? { ...thread, langgraphThreadId } : thread,
-      );
-    }),
-    detachLangGraphThread: vi.fn(async (threadId: string) => {
-      threads = threads.map((thread) =>
-        thread._id === threadId ? { ...thread, langgraphThreadId: undefined } : thread,
-      );
-    }),
-    appendUserMessage: vi.fn(async (threadId: string, content: string) => {
-      messages.push({
-        _id: `msg-${messages.length + 1}`,
-        role: "user",
-        content,
-        createdAt: Date.now(),
-      });
-      activeThreadId = threadId;
-    }),
-    syncAssistantMessages: vi.fn(async (_threadId: string, nextMessages) => {
-      for (const message of nextMessages) {
-        messages.push({
-          _id: `msg-${messages.length + 1}`,
-          role: "assistant",
-          content: message.content,
-          createdAt: message.createdAt,
-          langgraphMessageId: message.langgraphMessageId,
-        });
-      }
-    }),
-    setRunning: vi.fn(async (_threadId: string, langgraphRunId?: string) => {
-      runState = { status: "running", langgraphRunId };
-    }),
-    setError: vi.fn(async (_threadId: string, errorMessage: string) => {
-      runState = { status: "error", errorMessage };
-    }),
-    setIdle: vi.fn(async () => {
-      runState = { status: "idle" };
-    }),
   };
 
   return {
@@ -109,9 +59,6 @@ function createBackendHarness(initial?: {
     },
     get threads() {
       return threads;
-    },
-    get runState() {
-      return runState;
     },
     get messages() {
       return messages.filter((message) => !activeThreadId || message);
@@ -123,45 +70,6 @@ function createBackendHarness(initial?: {
     ensureViewer: vi.fn(async () => {}),
     createThread: calls.createThread,
     removeThread: calls.removeThread,
-    attachLangGraphThread: calls.attachLangGraphThread,
-    detachLangGraphThread: calls.detachLangGraphThread,
-    appendUserMessage: calls.appendUserMessage,
-    syncAssistantMessages: calls.syncAssistantMessages,
-    setRunning: calls.setRunning,
-    setError: calls.setError,
-    setIdle: calls.setIdle,
-  };
-}
-
-function createPersistenceHarness(): PersistencePort & {
-  calls: {
-    setThreadId: ReturnType<typeof vi.fn>;
-    setRunId: ReturnType<typeof vi.fn>;
-    clearAll: ReturnType<typeof vi.fn>;
-  };
-} {
-  let threadId: string | null = null;
-  let runId: string | null = null;
-  const calls = {
-    setThreadId: vi.fn((id: string | null) => {
-      threadId = id;
-    }),
-    setRunId: vi.fn((id: string | null) => {
-      runId = id;
-    }),
-    clearAll: vi.fn(() => {
-      threadId = null;
-      runId = null;
-    }),
-  };
-
-  return {
-    calls,
-    getThreadId: () => threadId,
-    setThreadId: calls.setThreadId,
-    getRunId: () => runId,
-    setRunId: calls.setRunId,
-    clearAll: calls.clearAll,
   };
 }
 
@@ -187,7 +95,10 @@ function createTurnApiHarness(): TurnApiPort & {
   };
 }
 
-function createStreamHarness(initial?: Partial<StreamState>): {
+function createStreamHarness(
+  initial?: Partial<StreamState>,
+  options?: { requireConfiguredThreadForJoin?: boolean },
+): {
   useStream: UseStreamAdapter;
   calls: {
     switchThread: ReturnType<typeof vi.fn>;
@@ -242,9 +153,18 @@ function createStreamHarness(initial?: Partial<StreamState>): {
     stop: calls.stop,
   };
 
-  const useStream: UseStreamAdapter = (_config, nextCallbacks) => {
+  const useStream: UseStreamAdapter = (config, nextCallbacks) => {
     callbacks = nextCallbacks;
     const [, forceRender] = useState(0);
+    const joinStream = useCallback(
+      async (runId: string) => {
+        if (options?.requireConfiguredThreadForJoin && !config.threadId) {
+          return;
+        }
+        await calls.joinStream(runId);
+      },
+      [config.threadId],
+    );
 
     useEffect(() => {
       const listener = () => forceRender((value) => value + 1);
@@ -254,7 +174,10 @@ function createStreamHarness(initial?: Partial<StreamState>): {
       };
     }, []);
 
-    return snapshot;
+    return {
+      ...snapshot,
+      joinStream,
+    };
   };
 
   return {
@@ -292,14 +215,15 @@ function createStreamHarness(initial?: Partial<StreamState>): {
 describe("useChatOrchestrator streaming contract", () => {
   test("submits a new conversation through the UI backend before streaming", async () => {
     const backend = createBackendHarness();
-    const persistence = createPersistenceHarness();
-    const stream = createStreamHarness();
+    const stream = createStreamHarness(
+      {},
+      { requireConfiguredThreadForJoin: true },
+    );
     const turnApi = createTurnApiHarness();
 
     const { result } = renderHook(() =>
       useChatOrchestrator({
         backend,
-        persistence,
         useStream: stream.useStream,
         authToken: "token",
         turnApi,
@@ -317,43 +241,12 @@ describe("useChatOrchestrator streaming contract", () => {
       uiThreadId: "thread-1",
       content: "Check Survey No. 45/2",
     });
-    expect(backend.calls.appendUserMessage).not.toHaveBeenCalled();
-    expect(backend.calls.setRunning).not.toHaveBeenCalled();
     expect(stream.calls.submit).not.toHaveBeenCalled();
     expect(stream.calls.switchThread).toHaveBeenLastCalledWith("lg-thread-1");
     expect(stream.calls.joinStream).toHaveBeenCalledWith("run-1");
 
     await waitFor(() => {
       expect(result.current.selectedThread?._id).toBe("thread-1");
-    });
-  });
-
-  test("attaches the LangGraph thread ID returned by the stream", async () => {
-    const backend = createBackendHarness();
-    const persistence = createPersistenceHarness();
-    const stream = createStreamHarness();
-
-    const { result } = renderHook(() =>
-      useChatOrchestrator({
-        backend,
-        persistence,
-        useStream: stream.useStream,
-        authToken: "token",
-      }),
-    );
-
-    await act(async () => {
-      await result.current.submitMessage("Check Baner");
-    });
-
-    stream.emitThreadId("lg-thread-1");
-
-    await waitFor(() => {
-      expect(persistence.calls.setThreadId).toHaveBeenCalledWith("lg-thread-1");
-      expect(backend.calls.attachLangGraphThread).toHaveBeenCalledWith(
-        "thread-1",
-        "lg-thread-1",
-      );
     });
   });
 
@@ -371,13 +264,11 @@ describe("useChatOrchestrator streaming contract", () => {
         { role: "user", content: "follow up", createdAt: 300 },
       ],
     });
-    const persistence = createPersistenceHarness();
     const stream = createStreamHarness();
 
     const { result } = renderHook(() =>
       useChatOrchestrator({
         backend,
-        persistence,
         useStream: stream.useStream,
         authToken: "token",
       }),
@@ -409,14 +300,12 @@ describe("useChatOrchestrator streaming contract", () => {
 
   test("keeps every live Assistant Message in backend position order", async () => {
     const backend = createBackendHarness();
-    const persistence = createPersistenceHarness();
     const stream = createStreamHarness();
     const turnApi = createTurnApiHarness();
 
     const { result } = renderHook(() =>
       useChatOrchestrator({
         backend,
-        persistence,
         useStream: stream.useStream,
         authToken: "token",
         turnApi,
@@ -466,14 +355,11 @@ describe("useChatOrchestrator streaming contract", () => {
         },
       ],
     });
-    backend.appendUserMessage = vi.fn(async () => {});
-    const persistence = createPersistenceHarness();
     const stream = createStreamHarness();
 
     const { result } = renderHook(() =>
       useChatOrchestrator({
         backend,
-        persistence,
         useStream: stream.useStream,
         authToken: "token",
       }),
@@ -502,51 +388,14 @@ describe("useChatOrchestrator streaming contract", () => {
     ]);
   });
 
-  test("mirrors final assistant messages and marks the thread idle on finish", async () => {
-    const backend = createBackendHarness();
-    const persistence = createPersistenceHarness();
-    const stream = createStreamHarness();
-
-    const { result } = renderHook(() =>
-      useChatOrchestrator({
-        backend,
-        persistence,
-        useStream: stream.useStream,
-        authToken: "token",
-      }),
-    );
-
-    await act(async () => {
-      await result.current.submitMessage("Check Hinjewadi");
-    });
-
-    stream.emitFinish({
-      values: {
-        messages: [
-          { type: "human", content: "Check Hinjewadi", createdAt: 100 },
-          { type: "ai", id: "ai-final", content: "Final answer", createdAt: 200 },
-        ],
-      },
-    });
-
-    await waitFor(() => {
-      expect(backend.calls.syncAssistantMessages).toHaveBeenCalledWith("thread-1", [
-        { langgraphMessageId: "ai-final", content: "Final answer", createdAt: 200 },
-      ]);
-      expect(backend.calls.setIdle).toHaveBeenCalledWith("thread-1");
-    });
-  });
-
   test("does not finalize backend-owned turns from the browser", async () => {
     const backend = createBackendHarness();
-    const persistence = createPersistenceHarness();
     const stream = createStreamHarness();
     const turnApi = createTurnApiHarness();
 
     const { result } = renderHook(() =>
       useChatOrchestrator({
         backend,
-        persistence,
         useStream: stream.useStream,
         authToken: "token",
         turnApi,
@@ -566,19 +415,15 @@ describe("useChatOrchestrator streaming contract", () => {
     });
 
     await act(async () => {});
-    expect(backend.calls.syncAssistantMessages).not.toHaveBeenCalled();
-    expect(backend.calls.setIdle).not.toHaveBeenCalled();
   });
 
-  test("marks the selected thread error with the stream error message", async () => {
+  test("reports a stream error without mutating durable turn state", async () => {
     const backend = createBackendHarness();
-    const persistence = createPersistenceHarness();
     const stream = createStreamHarness();
 
     const { result } = renderHook(() =>
       useChatOrchestrator({
         backend,
-        persistence,
         useStream: stream.useStream,
         authToken: "token",
       }),
@@ -591,21 +436,18 @@ describe("useChatOrchestrator streaming contract", () => {
     await stream.emitError(new Error("LangGraph failed"));
 
     await waitFor(() => {
-      expect(backend.calls.setError).toHaveBeenCalledWith("thread-1", "LangGraph failed");
       expect(result.current.statusNote).toBe("LangGraph failed");
     });
   });
 
   test("stops the backend run before closing the local stream", async () => {
     const backend = createBackendHarness();
-    const persistence = createPersistenceHarness();
     const stream = createStreamHarness();
     const turnApi = createTurnApiHarness();
 
     const { result } = renderHook(() =>
       useChatOrchestrator({
         backend,
-        persistence,
         useStream: stream.useStream,
         authToken: "token",
         turnApi,
@@ -626,7 +468,115 @@ describe("useChatOrchestrator streaming contract", () => {
     ).toBeLessThan(stream.calls.stop.mock.invocationCallOrder[0]);
   });
 
-  test("clears local linkage and starts fresh when the stream reports interrupts", async () => {
+  test("stops a selected Live Turn using its persisted run identity", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+    expect(result.current.canStop).toBe(true);
+    await act(async () => {
+      await result.current.stop();
+    });
+
+    expect(turnApi.calls.cancelRun).toHaveBeenCalledWith("lg-thread-1", "run-1");
+  });
+
+  test("keeps a Live Turn in a stopping state until cancellation resolves", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+    let resolveCancellation:
+      | ((value: { status: "cancelled" }) => void)
+      | undefined;
+    turnApi.calls.cancelRun.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCancellation = resolve;
+        }),
+    );
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+    let stopPromise: Promise<void>;
+    act(() => {
+      stopPromise = result.current.stop();
+    });
+
+    expect(result.current.isStopping).toBe(true);
+
+    await act(async () => {
+      resolveCancellation?.({ status: "cancelled" });
+      await stopPromise;
+    });
+
+    expect(result.current.isStopping).toBe(false);
+  });
+
+  test("keeps the selected conversation when the stream reports interrupt metadata", async () => {
     const backend = createBackendHarness({
       threads: [
         {
@@ -637,13 +587,11 @@ describe("useChatOrchestrator streaming contract", () => {
         } as Thread,
       ],
     });
-    const persistence = createPersistenceHarness();
     const stream = createStreamHarness();
 
     const { result } = renderHook(() =>
       useChatOrchestrator({
         backend,
-        persistence,
         useStream: stream.useStream,
         authToken: "token",
       }),
@@ -656,10 +604,875 @@ describe("useChatOrchestrator streaming contract", () => {
     stream.setState({ interrupts: [{ value: "needs review" }] });
 
     await waitFor(() => {
-      expect(result.current.selectedThread).toBeNull();
-      expect(persistence.calls.clearAll).toHaveBeenCalled();
-      expect(stream.calls.switchThread).toHaveBeenCalledWith(null);
-      expect(result.current.statusNote).toMatch(/unexpected pause/i);
+      expect(result.current.selectedThread?._id).toBe("thread-1");
+    });
+    expect(stream.calls.switchThread).not.toHaveBeenCalledWith(null);
+    expect(result.current.statusNote).toBeNull();
+  });
+
+  test("reattaches a selected Live Turn after configuring its LangGraph thread", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness(
+      {},
+      { requireConfiguredThreadForJoin: true },
+    );
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi: createTurnApiHarness(),
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    await waitFor(() => {
+      expect(stream.calls.joinStream).toHaveBeenCalledWith("run-1");
+    });
+    expect(result.current.selectedThread?._id).toBe("thread-1");
+  });
+
+  test("derives busy state from the selected Live Turn", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi: createTurnApiHarness(),
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    expect(result.current.busy).toBe(true);
+  });
+
+  test("retries Live Turn attachment while its identifiers remain selected", async () => {
+    vi.useFakeTimers();
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness(
+      {},
+      { requireConfiguredThreadForJoin: true },
+    );
+    stream.calls.joinStream
+      .mockRejectedValueOnce(new Error("Disconnected"))
+      .mockResolvedValue(undefined);
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi: createTurnApiHarness(),
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+    await vi.waitFor(() => {
+      expect(stream.calls.joinStream).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(stream.calls.joinStream).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  test("reports reconnecting without deselecting the Conversation", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness(
+      {},
+      { requireConfiguredThreadForJoin: true },
+    );
+    stream.calls.joinStream.mockRejectedValue(new Error("Disconnected"));
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi: createTurnApiHarness(),
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    await waitFor(() => {
+      expect(result.current.connectionStatus).toBe("reconnecting");
+    });
+    expect(result.current.selectedThread?._id).toBe("thread-1");
+  });
+
+  test("retries a failed turn as a new Conversation Turn", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "failed-turn",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "failed",
+          errorMessage: "Run failed",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+    await act(async () => {
+      await result.current.retryTurn("failed-turn");
+    });
+
+    expect(turnApi.calls.submitTurn).toHaveBeenCalledWith({
+      turnId: expect.not.stringMatching(/^failed-turn$/),
+      humanMessageId: expect.any(String),
+      uiThreadId: "thread-1",
+      content: "Check Baner",
+    });
+  });
+
+  test("shows a failed submission as failed and allows retry", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+    turnApi.calls.submitTurn.mockRejectedValue(new Error("Network error"));
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+    await act(async () => {
+      try {
+        await result.current.submitMessage("Check Baner");
+      } catch {
+        // expected
+      }
+    });
+
+    const failedTurn = result.current.turns.find(
+      (t) => t.userContent === "Check Baner",
+    );
+    expect(failedTurn).toBeDefined();
+    expect(failedTurn?.status).toBe("failed");
+    expect(failedTurn?.errorMessage).toBe("Unable to submit");
+
+    turnApi.calls.submitTurn.mockResolvedValue({
+      turnId: "retry-turn",
+      humanMessageId: "retry-human",
+      threadId: "lg-thread-1",
+      runId: "run-1",
+    });
+    await act(async () => {
+      await result.current.retryTurn(failedTurn!.turnId);
+    });
+
+    expect(turnApi.calls.submitTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uiThreadId: "thread-1",
+        content: "Check Baner",
+      }),
+    );
+  });
+
+  test("rejects another submission while the Conversation has a Live Turn", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+    await act(async () => {
+      await result.current.submitMessage("Another request");
+    });
+
+    expect(turnApi.calls.submitTurn).not.toHaveBeenCalled();
+  });
+
+  test("cancels a running Agent Run before deleting its Conversation", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+          activeTurn: {
+            status: "running",
+            langgraphThreadId: "lg-thread-1",
+            langgraphRunId: "run-1",
+          },
+        } as Thread,
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.deleteThread("thread-1");
+    });
+
+    expect(turnApi.calls.cancelRun).toHaveBeenCalledWith("lg-thread-1", "run-1");
+    expect(backend.calls.removeThread).toHaveBeenCalledWith("thread-1");
+    expect(
+      turnApi.calls.cancelRun.mock.invocationCallOrder[0],
+    ).toBeLessThan(backend.calls.removeThread.mock.invocationCallOrder[0]);
+  });
+
+  test("leaves conversation intact when cancellation fails during deletion", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+          activeTurn: {
+            status: "running",
+            langgraphThreadId: "lg-thread-1",
+            langgraphRunId: "run-1",
+          },
+        } as Thread,
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+    turnApi.calls.cancelRun.mockRejectedValueOnce(new Error("Cancel failed"));
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.deleteThread("thread-1");
+    });
+
+    expect(turnApi.calls.cancelRun).toHaveBeenCalledWith("lg-thread-1", "run-1");
+    expect(backend.calls.removeThread).not.toHaveBeenCalled();
+    expect(result.current.statusNote).toBe("Cancel failed");
+  });
+
+  test("reconciles live stream content with persisted by longest prefix", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [
+            {
+              id: "ai-1",
+              langgraphMessageId: "lg-ai-1",
+              messagePosition: 0,
+              canonicalContent: "Researching Baner",
+              createdAt: 100,
+            },
+          ],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    // Live stream has prefix of persisted content
+    stream.setState({
+      isLoading: true,
+      messages: [
+        {
+          type: "ai",
+          id: "lg-ai-1",
+          content: "Researching",
+          messagePosition: 0,
+          createdAt: 100,
+        },
+      ],
+    });
+
+    const turn = result.current.turns[0];
+    expect(turn?.assistantMessages).toHaveLength(1);
+    expect(turn?.assistantMessages[0].canonicalContent).toBe("Researching Baner");
+    expect(turn?.assistantMessages[0].displayOnlyContent).toBeUndefined();
+  });
+
+  test("shows display-only continuation when live stream exceeds persisted", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [
+            {
+              id: "ai-1",
+              langgraphMessageId: "lg-ai-1",
+              messagePosition: 0,
+              canonicalContent: "Researching",
+              createdAt: 100,
+            },
+          ],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    // Live stream has longer content than persisted
+    stream.setState({
+      isLoading: true,
+      messages: [
+        {
+          type: "ai",
+          id: "lg-ai-1",
+          content: "Researching Baner",
+          messagePosition: 0,
+          createdAt: 100,
+        },
+      ],
+    });
+
+    const turn = result.current.turns[0];
+    expect(turn?.assistantMessages).toHaveLength(1);
+    expect(turn?.assistantMessages[0].canonicalContent).toBe("Researching");
+    expect(turn?.assistantMessages[0].displayOnlyContent).toBe(" Baner");
+  });
+
+  test("ignores live stream when content diverges from persisted", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [
+            {
+              id: "ai-1",
+              langgraphMessageId: "lg-ai-1",
+              messagePosition: 0,
+              canonicalContent: "Researching Baner",
+              createdAt: 100,
+            },
+          ],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    // Live stream has completely different content
+    stream.setState({
+      isLoading: true,
+      messages: [
+        {
+          type: "ai",
+          id: "lg-ai-1",
+          content: "Final assessment",
+          messagePosition: 0,
+          createdAt: 100,
+        },
+      ],
+    });
+
+    const turn = result.current.turns[0];
+    expect(turn?.assistantMessages).toHaveLength(1);
+    expect(turn?.assistantMessages[0].canonicalContent).toBe("Researching Baner");
+    expect(turn?.assistantMessages[0].displayOnlyContent).toBeUndefined();
+  });
+
+  test("adds new live stream messages as display-only", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [
+            {
+              id: "ai-1",
+              langgraphMessageId: "lg-ai-1",
+              messagePosition: 0,
+              canonicalContent: "Researching",
+              createdAt: 100,
+            },
+          ],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    // Live stream has a new message not in persisted
+    stream.setState({
+      isLoading: true,
+      messages: [
+        {
+          type: "ai",
+          id: "lg-ai-2",
+          content: "Final assessment",
+          messagePosition: 1,
+          createdAt: 200,
+        },
+      ],
+    });
+
+    const turn = result.current.turns[0];
+    expect(turn?.assistantMessages).toHaveLength(2);
+    expect(turn?.assistantMessages[0].canonicalContent).toBe("Researching");
+    expect(turn?.assistantMessages[1].canonicalContent).toBe("");
+    expect(turn?.assistantMessages[1].displayOnlyContent).toBe("Final assessment");
+  });
+
+  test("shows finalizing status when stream ends but turn is still running", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    await waitFor(() => {
+      expect(stream.calls.joinStream).toHaveBeenCalledWith("run-1");
+    });
+
+    // Simulate stream loading then ending while turn still running
+    stream.setState({
+      isLoading: true,
+      messages: [],
+    });
+
+    await waitFor(() => {
+      expect(result.current.connectionStatus).toBe(null);
+    });
+
+    stream.setState({
+      isLoading: false,
+      messages: [],
+    });
+
+    await waitFor(() => {
+      expect(result.current.connectionStatus).toBe("finalizing");
+    });
+  });
+
+  test("clears finalizing status when turn becomes completed", async () => {
+    const backend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "running",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [],
+          createdAt: 100,
+        },
+      ],
+    });
+    const stream = createStreamHarness();
+    const turnApi = createTurnApiHarness();
+
+    const { result } = renderHook(() =>
+      useChatOrchestrator({
+        backend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result.current.selectThread("thread-1");
+    });
+
+    await waitFor(() => {
+      expect(stream.calls.joinStream).toHaveBeenCalledWith("run-1");
+    });
+
+    // Simulate stream loading then ending while turn still running
+    stream.setState({
+      isLoading: true,
+      messages: [],
+    });
+
+    await waitFor(() => {
+      expect(result.current.connectionStatus).toBe(null);
+    });
+
+    stream.setState({
+      isLoading: false,
+      messages: [],
+    });
+
+    await waitFor(() => {
+      expect(result.current.connectionStatus).toBe("finalizing");
+    });
+
+    // Now turn becomes completed
+    const completedBackend = createBackendHarness({
+      threads: [
+        {
+          _id: "thread-1",
+          title: "Existing thread",
+          updatedAt: 100,
+        } as Thread,
+      ],
+      turns: [
+        {
+          turnId: "turn-1",
+          threadId: "thread-1",
+          turnPosition: 0,
+          userContent: "Check Baner",
+          status: "completed",
+          langgraphThreadId: "lg-thread-1",
+          langgraphRunId: "run-1",
+          assistantMessages: [
+            {
+              id: "ai-1",
+              langgraphMessageId: "lg-ai-1",
+              messagePosition: 0,
+              canonicalContent: "Researching Baner",
+              createdAt: 100,
+            },
+          ],
+          createdAt: 100,
+        },
+      ],
+    });
+
+    // Re-render with completed backend
+    const { result: result2 } = renderHook(() =>
+      useChatOrchestrator({
+        backend: completedBackend,
+        useStream: stream.useStream,
+        authToken: "token",
+        turnApi,
+      }),
+    );
+
+    act(() => {
+      result2.current.selectThread("thread-1");
+    });
+
+    await waitFor(() => {
+      expect(result2.current.connectionStatus).toBe(null);
     });
   });
 });

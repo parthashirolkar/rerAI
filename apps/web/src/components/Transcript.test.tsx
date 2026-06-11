@@ -133,4 +133,34 @@ describe("Transcript", () => {
 
     expect(container.querySelectorAll(".typing-dot")).toHaveLength(0);
   });
+
+  test("offers Try again beneath a failed user message", () => {
+    const onRetryTurn = vi.fn();
+    render(
+      <Transcript
+        hasMessages
+        isStreaming={false}
+        showThinking={false}
+        messages={[]}
+        turns={[
+          {
+            turnId: "turn-1",
+            turnPosition: 0,
+            userContent: "Check Baner",
+            status: "failed",
+            errorMessage: "Run failed",
+            createdAt: 100,
+            assistantMessages: [],
+          },
+        ]}
+        sampleQueries={samples}
+        onRetryTurn={onRetryTurn}
+        onUseSample={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+  });
 });

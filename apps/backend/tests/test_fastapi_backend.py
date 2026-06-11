@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -198,10 +199,120 @@ class PartialThenBlockingGraph(FakeGraph):
         )
 
 
+class MultiMessageGraph(FakeGraph):
+    async def astream(self, input, config=None, **kwargs):
+        self.stream_calls += 1
+        yield (
+            "messages",
+            (
+                AIMessageChunk(content="first", id="ai-1"),
+                {"langgraph_node": "agent"},
+            ),
+        )
+        yield (
+            "messages",
+            (
+                AIMessageChunk(content=" second", id="ai-1"),
+                {"langgraph_node": "agent"},
+            ),
+        )
+        yield (
+            "messages",
+            (
+                AIMessageChunk(content="third", id="ai-2"),
+                {"langgraph_node": "agent"},
+            ),
+        )
+        yield (
+            "values",
+            {
+                "messages": input["messages"]
+                + [
+                    AIMessage(content="first second", id="ai-1"),
+                    AIMessage(content="third", id="ai-2"),
+                ]
+            },
+        )
+
+    async def aget_state(self, config, *, subgraphs=False):
+        return StateSnapshot(
+            values={
+                "messages": [
+                    {"type": "human", "id": "human-1", "content": "Check Survey No. 45/2"},
+                    {"type": "ai", "id": "ai-1", "content": "first second"},
+                    {"type": "ai", "id": "ai-2", "content": "third"},
+                ]
+            },
+            next=(),
+            config={
+                "configurable": {
+                    "thread_id": config["configurable"]["thread_id"],
+                    "checkpoint_id": "cp-multi",
+                }
+            },
+            metadata={"run_id": "run-1"},
+            created_at="2026-04-13T00:00:00+00:00",
+            parent_config=None,
+            tasks=(),
+            interrupts=(),
+        )
+
+
+class MultiMessageThenBlockingGraph(FakeGraph):
+    async def astream(self, input, config=None, **kwargs):
+        self.stream_calls += 1
+        yield (
+            "messages",
+            (
+                AIMessageChunk(content="first", id="ai-1"),
+                {"langgraph_node": "agent"},
+            ),
+        )
+        yield (
+            "messages",
+            (
+                AIMessageChunk(content=" second", id="ai-1"),
+                {"langgraph_node": "agent"},
+            ),
+        )
+        yield (
+            "messages",
+            (
+                AIMessageChunk(content="third", id="ai-2"),
+                {"langgraph_node": "agent"},
+            ),
+        )
+        await asyncio.Event().wait()
+
+    async def aget_state(self, config, *, subgraphs=False):
+        return StateSnapshot(
+            values={
+                "messages": [
+                    {"type": "human", "id": "human-1", "content": "Check Survey No. 45/2"},
+                    {"type": "ai", "id": "ai-1", "content": "first second"},
+                    {"type": "ai", "id": "ai-2", "content": "third"},
+                ]
+            },
+            next=(),
+            config={
+                "configurable": {
+                    "thread_id": config["configurable"]["thread_id"],
+                    "checkpoint_id": "cp-multi-blocking",
+                }
+            },
+            metadata={"run_id": "run-1"},
+            created_at="2026-04-13T00:00:00+00:00",
+            parent_config=None,
+            tasks=(),
+            interrupts=(),
+        )
+
+
 class FakeConvexClient:
     def __init__(self) -> None:
         self.turns: dict[str, dict] = {}
         self.finalizations: list[dict] = []
+        self.projections: list[dict] = []
 
     async def get_viewer(self, token: str):
         if token == "test-token":
@@ -230,6 +341,7 @@ class FakeConvexClient:
                 "humanMessageId": human_message_id,
                 "content": content,
                 "status": "pending",
+                "updatedAt": 0,
             },
         )
         return turn
@@ -248,6 +360,7 @@ class FakeConvexClient:
                 "status": "running",
                 "langgraphThreadId": langgraph_thread_id,
                 "langgraphRunId": langgraph_run_id,
+                "updatedAt": 0,
             }
         )
         return turn
@@ -255,10 +368,51 @@ class FakeConvexClient:
     async def finalize_turn(self, payload: dict) -> None:
         self.finalizations.append(payload)
 
+    async def project_turn(self, payload: dict) -> None:
+        self.projections.append(payload)
+
+    async def list_stale_pending_turns(self, *, cutoff_timestamp: int) -> list[dict[str, Any]]:
+        return [
+            turn for turn in self.turns.values()
+            if turn.get("status") == "pending" and turn.get("updatedAt", 0) < cutoff_timestamp
+        ]
+
+    async def list_invalid_running_turns(self) -> list[dict[str, Any]]:
+        return [
+            turn for turn in self.turns.values()
+            if turn.get("status") == "running" and (
+                not turn.get("langgraphThreadId") or not turn.get("langgraphRunId")
+            )
+        ]
+
 
 class FailingFinalizationConvexClient(FakeConvexClient):
     async def finalize_turn(self, payload: dict) -> None:
         raise RuntimeError("Convex unavailable")
+
+
+class SlowProjectingConvexClient(FakeConvexClient):
+    async def project_turn(self, payload: dict) -> None:
+        await asyncio.sleep(0.5)
+        await super().project_turn(payload)
+
+
+class FailingProjectingConvexClient(FakeConvexClient):
+    def __init__(self, fail_count: int = 2) -> None:
+        super().__init__()
+        self.fail_count = fail_count
+        self.attempts = 0
+
+    async def project_turn(self, payload: dict) -> None:
+        self.attempts += 1
+        if self.attempts <= self.fail_count:
+            raise RuntimeError("Convex unavailable")
+        await super().project_turn(payload)
+
+
+class FailingRunStore(Store):
+    def create_run(self, **kwargs):
+        raise RuntimeError("Run store unavailable")
 
 
 @pytest.fixture
@@ -455,6 +609,38 @@ def test_turn_submission_rejects_reused_turn_id_with_different_request(
     assert conflict.status_code == 409
 
 
+def test_run_creation_failure_terminalizes_the_turn(tmp_path: Path):
+    database_uri = f"sqlite:///{tmp_path / 'rerai-turn-start-failure.db'}"
+    convex_client = FakeConvexClient()
+    runtime = BackendRuntime(
+        database_uri,
+        graph=FakeGraph(),
+        metadata_store=FailingRunStore(database_uri),
+    )
+    app = create_app(runtime, convex_client=convex_client)
+
+    with TestClient(app) as test_client:
+        test_client.headers.update({"Authorization": "Bearer test-token"})
+        response = test_client.post(
+            "/chat/turns",
+            json={
+                "turnId": "turn-1",
+                "humanMessageId": "human-1",
+                "uiThreadId": "ui-thread-1",
+                "content": "Check Survey No. 45/2",
+            },
+        )
+
+    assert response.status_code == 502
+    assert convex_client.finalizations[-1] == {
+        "finalizationId": response.headers["x-rerai-run-id"],
+        "turnId": "turn-1",
+        "status": "failed",
+        "errorMessage": "Unable to create Agent Run",
+        "assistantMessages": [],
+    }
+
+
 def test_completed_turn_is_finalized_from_canonical_state(tmp_path: Path):
     database_uri = f"sqlite:///{tmp_path / 'rerai-turn-finalize.db'}"
     convex_client = FakeConvexClient()
@@ -586,6 +772,52 @@ def test_cancelled_turn_preserves_uncheckpointed_text_as_display_only(
     ]
 
 
+def test_live_turn_projects_partial_assistant_content_without_browser_stream(
+    tmp_path: Path,
+):
+    database_uri = f"sqlite:///{tmp_path / 'rerai-turn-live-projection.db'}"
+    convex_client = FakeConvexClient()
+    runtime = BackendRuntime(
+        database_uri,
+        graph=PartialThenBlockingGraph(),
+        metadata_store=Store(database_uri),
+    )
+    app = create_app(runtime, convex_client=convex_client)
+
+    with TestClient(app) as test_client:
+        test_client.headers.update({"Authorization": "Bearer test-token"})
+        submitted = test_client.post(
+            "/chat/turns",
+            json={
+                "turnId": "turn-1",
+                "humanMessageId": "human-1",
+                "uiThreadId": "ui-thread-1",
+                "content": "Check Survey No. 45/2",
+            },
+        ).json()
+        for _ in range(100):
+            if convex_client.projections:
+                break
+            time.sleep(0.01)
+
+        test_client.post(
+            f"/threads/{submitted['thread_id']}/runs/{submitted['run_id']}/cancel"
+        )
+
+    assert convex_client.projections[-1] == {
+        "turnId": "turn-1",
+        "assistantMessages": [
+            {
+                "messageId": "ai-partial",
+                "langgraphMessageId": "ai-partial",
+                "messagePosition": 0,
+                "canonicalContent": "",
+                "displayOnlyContent": "Partial assessment",
+            }
+        ],
+    }
+
+
 def test_failed_projection_replays_from_durable_outbox_after_restart(
     tmp_path: Path,
 ):
@@ -668,6 +900,181 @@ def test_startup_terminalizes_orphaned_running_turn(tmp_path: Path):
     assert runtime.metadata_store.get_run(run.run_id).status == "error"
     assert convex_client.finalizations[0]["turnId"] == "turn-1"
     assert convex_client.finalizations[0]["status"] == "failed"
+
+
+def test_startup_recovers_stale_pending_turns(tmp_path: Path):
+    database_uri = f"sqlite:///{tmp_path / 'rerai-stale-pending.db'}"
+    convex_client = FakeConvexClient()
+    convex_client.turns["turn-1"] = {
+        "uiThreadId": "ui-thread-1",
+        "turnId": "turn-1",
+        "humanMessageId": "human-1",
+        "content": "Check Survey No. 45/2",
+        "status": "pending",
+        "updatedAt": 0,
+    }
+    runtime = BackendRuntime(
+        database_uri,
+        graph=FakeGraph(),
+        metadata_store=Store(database_uri),
+    )
+    app = create_app(runtime, convex_client=convex_client)
+
+    with TestClient(app):
+        pass
+
+    assert len(convex_client.finalizations) == 1
+    assert convex_client.finalizations[0]["turnId"] == "turn-1"
+    assert convex_client.finalizations[0]["status"] == "failed"
+    assert convex_client.finalizations[0]["errorMessage"] == "Conversation Turn timed out before starting"
+
+
+def test_startup_recovers_invalid_running_turns(tmp_path: Path):
+    database_uri = f"sqlite:///{tmp_path / 'rerai-invalid-running.db'}"
+    convex_client = FakeConvexClient()
+    convex_client.turns["turn-1"] = {
+        "uiThreadId": "ui-thread-1",
+        "turnId": "turn-1",
+        "humanMessageId": "human-1",
+        "content": "Check Survey No. 45/2",
+        "status": "running",
+        "langgraphThreadId": None,
+        "langgraphRunId": None,
+        "updatedAt": 0,
+    }
+    runtime = BackendRuntime(
+        database_uri,
+        graph=FakeGraph(),
+        metadata_store=Store(database_uri),
+    )
+    app = create_app(runtime, convex_client=convex_client)
+
+    with TestClient(app):
+        pass
+
+    assert len(convex_client.finalizations) == 1
+    assert convex_client.finalizations[0]["turnId"] == "turn-1"
+    assert convex_client.finalizations[0]["status"] == "failed"
+    assert convex_client.finalizations[0]["errorMessage"] == "Conversation Turn has invalid run identifiers"
+
+
+def test_live_projection_coalesces_multiple_messages(tmp_path: Path):
+    database_uri = f"sqlite:///{tmp_path / 'rerai-projection-coalesce.db'}"
+    convex_client = FakeConvexClient()
+    store = Store(database_uri)
+    runtime = BackendRuntime(
+        database_uri,
+        graph=MultiMessageThenBlockingGraph(),
+        metadata_store=store,
+    )
+    app = create_app(runtime, convex_client=convex_client)
+
+    with TestClient(app) as test_client:
+        test_client.headers.update({"Authorization": "Bearer test-token"})
+        submitted = test_client.post(
+            "/chat/turns",
+            json={
+                "turnId": "turn-1",
+                "humanMessageId": "human-1",
+                "uiThreadId": "ui-thread-1",
+                "content": "Check Survey No. 45/2",
+            },
+        ).json()
+        for _ in range(200):
+            events = store.list_events(submitted["run_id"])
+            if len([e for e in events if e.event == "messages"]) >= 3:
+                break
+            time.sleep(0.01)
+
+        time.sleep(0.2)
+
+        test_client.post(
+            f"/threads/{submitted['thread_id']}/runs/{submitted['run_id']}/cancel"
+        )
+
+    assert len(convex_client.projections) == 1
+    assert len(convex_client.projections[0]["assistantMessages"]) == 2
+
+
+def test_projection_is_skipped_when_run_is_finalized(tmp_path: Path):
+    database_uri = f"sqlite:///{tmp_path / 'rerai-projection-race.db'}"
+    convex_client = SlowProjectingConvexClient()
+    store = Store(database_uri)
+    runtime = BackendRuntime(
+        database_uri,
+        graph=PartialThenBlockingGraph(),
+        metadata_store=store,
+    )
+    app = create_app(runtime, convex_client=convex_client)
+
+    with TestClient(app) as test_client:
+        test_client.headers.update({"Authorization": "Bearer test-token"})
+        submitted = test_client.post(
+            "/chat/turns",
+            json={
+                "turnId": "turn-1",
+                "humanMessageId": "human-1",
+                "uiThreadId": "ui-thread-1",
+                "content": "Check Survey No. 45/2",
+            },
+        ).json()
+        for _ in range(100):
+            if any(
+                event.event == "messages"
+                for event in store.list_events(submitted["run_id"])
+            ):
+                break
+            time.sleep(0.01)
+
+        test_client.post(
+            f"/threads/{submitted['thread_id']}/runs/{submitted['run_id']}/cancel"
+        )
+
+        time.sleep(0.6)
+
+    assert convex_client.finalizations[-1]["status"] == "cancelled"
+    assert len(convex_client.projections) == 0
+
+
+def test_projection_retries_on_transient_failure(tmp_path: Path):
+    database_uri = f"sqlite:///{tmp_path / 'rerai-projection-retry.db'}"
+    convex_client = FailingProjectingConvexClient(fail_count=2)
+    store = Store(database_uri)
+    runtime = BackendRuntime(
+        database_uri,
+        graph=PartialThenBlockingGraph(),
+        metadata_store=store,
+    )
+    app = create_app(runtime, convex_client=convex_client)
+
+    with TestClient(app) as test_client:
+        test_client.headers.update({"Authorization": "Bearer test-token"})
+        submitted = test_client.post(
+            "/chat/turns",
+            json={
+                "turnId": "turn-1",
+                "humanMessageId": "human-1",
+                "uiThreadId": "ui-thread-1",
+                "content": "Check Survey No. 45/2",
+            },
+        ).json()
+        for _ in range(100):
+            if any(
+                event.event == "messages"
+                for event in store.list_events(submitted["run_id"])
+            ):
+                break
+            time.sleep(0.01)
+
+        time.sleep(0.7)
+
+        test_client.post(
+            f"/threads/{submitted['thread_id']}/runs/{submitted['run_id']}/cancel"
+        )
+
+    assert convex_client.attempts == 3
+    assert len(convex_client.projections) == 1
+    assert convex_client.projections[0]["turnId"] == "turn-1"
 
 
 def test_stream_serializes_real_langchain_messages(tmp_path: Path):

@@ -96,19 +96,4 @@ export default defineSchema({
       "uiThreadId",
       "messagePosition",
     ]),
-  threadRunState: defineTable({
-    threadId: v.id("uiThreads"),
-    userId: v.id("users"),
-    langgraphRunId: v.optional(v.string()),
-    status: v.union(
-      v.literal("idle"),
-      v.literal("running"),
-      v.literal("interrupted"),
-      v.literal("error"),
-    ),
-    errorMessage: v.optional(v.string()),
-    updatedAt: v.number(),
-  })
-    .index("by_threadId", ["threadId"])
-    .index("by_userId_and_updatedAt", ["userId", "updatedAt"]),
 });

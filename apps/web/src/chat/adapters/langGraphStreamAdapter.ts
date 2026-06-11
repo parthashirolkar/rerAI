@@ -14,7 +14,7 @@ export const useLangGraphStreamAdapter: UseStreamAdapter = (
     assistantId: ASSISTANT_ID,
     threadId,
     fetchStateHistory: false,
-    reconnectOnMount: true,
+    reconnectOnMount: false,
     onThreadId(nextThreadId) {
       callbacks.onThreadId?.(nextThreadId);
     },

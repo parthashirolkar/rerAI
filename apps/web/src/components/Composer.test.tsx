@@ -55,4 +55,24 @@ describe("Composer", () => {
 
     expect(onChange).toHaveBeenCalledWith("Survey No. 45/2, Baner");
   });
+
+  test("shows Stop for a cancellable Live Turn", () => {
+    const onStop = vi.fn().mockResolvedValue(undefined);
+    render(
+      <Composer
+        busy
+        canStop
+        draft="Check Baner site"
+        isStopping={false}
+        onChange={vi.fn()}
+        onStop={onStop}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop generating" }));
+
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
+  });
 });

@@ -11,6 +11,7 @@ type TranscriptProps = {
   messages: ChatMessage[];
   turns?: ConversationTurn[];
   sampleQueries: string[];
+  onRetryTurn?: (turnId: string) => void;
   onUseSample: (query: string) => void;
 };
 
@@ -21,6 +22,7 @@ export function Transcript({
   messages,
   turns,
   sampleQueries,
+  onRetryTurn,
   onUseSample,
 }: TranscriptProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -91,8 +93,19 @@ export function Transcript({
                 return (
                   <div key={turn.turnId} className="contents">
                     <div className="flex justify-end">
-                      <div className="chat-bubble-user">
-                        <p className="whitespace-pre-wrap">{turn.userContent}</p>
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="chat-bubble-user">
+                          <p className="whitespace-pre-wrap">{turn.userContent}</p>
+                        </div>
+                        {turn.status === "failed" && onRetryTurn ? (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => onRetryTurn(turn.turnId)}
+                          >
+                            Try again
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
                     {assistantMessages.length > 0 ? (

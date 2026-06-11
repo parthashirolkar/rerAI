@@ -14,7 +14,28 @@ export const listMine = query({
       .order("desc")
       .take(100);
 
-    return threads.filter((thread) => thread.archivedAt === undefined);
+    return await Promise.all(
+      threads
+        .filter((thread) => thread.archivedAt === undefined)
+        .map(async (thread) => {
+          const latestTurn = await ctx.db
+            .query("conversationTurns")
+            .withIndex("by_uiThreadId_and_turnPosition", (q) =>
+              q.eq("uiThreadId", thread._id),
+            )
+            .order("desc")
+            .first();
+          const activeTurn =
+            latestTurn?.status === "pending" || latestTurn?.status === "running"
+              ? {
+                  status: latestTurn.status,
+                  langgraphThreadId: latestTurn.langgraphThreadId,
+                  langgraphRunId: latestTurn.langgraphRunId,
+                }
+              : undefined;
+          return { ...thread, activeTurn };
+        }),
+    );
   },
 });
 
@@ -134,14 +155,6 @@ export const remove = mutation({
       for (const message of batch) {
         await ctx.db.delete(message._id);
       }
-    }
-
-    const runState = await ctx.db
-      .query("threadRunState")
-      .withIndex("by_threadId", (q) => q.eq("threadId", thread._id))
-      .unique();
-    if (runState !== null) {
-      await ctx.db.delete(runState._id);
     }
 
     const preferences = await ctx.db

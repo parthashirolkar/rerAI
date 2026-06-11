@@ -83,6 +83,7 @@ class TurnSubmitRequest(BaseModel):
 
 TURN_THREAD_NAMESPACE = UUID("8cbd6f64-6c75-4d27-b9dc-aad995ea6bba")
 TURN_RUN_NAMESPACE = UUID("3d778561-9eb2-44d7-b42f-1cc9fc11a809")
+PENDING_LEASE_TIMEOUT_MS = 30_000
 
 
 def _stable_uuid(namespace: UUID, value: str) -> str:
@@ -170,6 +171,7 @@ def create_app(
         await active_runtime.setup()
         app.state.runtime = active_runtime
         app.state.convex_client = active_convex_client
+        progress_tasks: dict[str, asyncio.Task[None]] = {}
 
         async def deliver_finalization(payload: dict[str, Any]) -> None:
             outbox_id = str(payload["finalizationId"])
@@ -243,6 +245,69 @@ def create_app(
             )
             await deliver_finalization(payload)
 
+        async def _do_project_run(run_id: str) -> None:
+            run = await asyncio.to_thread(
+                active_runtime.metadata_store.get_run, run_id
+            )
+            if run is None:
+                return
+            if run.status != "running":
+                return
+            turn_id = run.metadata.get("turn_id")
+            if not isinstance(turn_id, str):
+                return
+            events = await asyncio.to_thread(
+                active_runtime.metadata_store.list_events, run_id
+            )
+            assistant_messages = reconcile_assistant_messages(
+                [],
+                streamed_assistant_messages(events),
+                preserve_display_only=True,
+            )
+            if not assistant_messages:
+                return
+            await active_convex_client.project_turn(
+                {
+                    "turnId": turn_id,
+                    "assistantMessages": assistant_messages,
+                }
+            )
+
+        async def project_run(run_id: str) -> None:
+            await asyncio.sleep(0.1)
+            await _do_project_run(run_id)
+
+        async def schedule_projection(run_id: str, _thread_id: str) -> None:
+            existing = progress_tasks.pop(run_id, None)
+            if existing is not None:
+                existing.cancel()
+
+            async def deliver() -> None:
+                current_task = asyncio.current_task()
+                try:
+                    await asyncio.sleep(0.1)
+                    for attempt in range(1, 4):
+                        try:
+                            await _do_project_run(run_id)
+                            return
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            logger.exception(
+                                "Unable to project live turn (attempt %d/%d)",
+                                attempt,
+                                3,
+                                extra={"run_id": run_id},
+                            )
+                            if attempt < 3:
+                                await asyncio.sleep(0.1 * (2 ** (attempt - 1)))
+                finally:
+                    if progress_tasks.get(run_id) is current_task:
+                        progress_tasks.pop(run_id, None)
+
+            progress_tasks[run_id] = asyncio.create_task(deliver())
+
+        active_runtime.orchestrator.set_progress_callback(schedule_projection)
         active_runtime.orchestrator.set_terminal_callback(finalize_run)
         orphaned_runs = await asyncio.to_thread(
             active_runtime.metadata_store.list_running_runs
@@ -269,6 +334,69 @@ def create_app(
                     extra={"outbox_id": item["outbox_id"]},
                 )
 
+        async def reconcile_stale_pending() -> None:
+            from datetime import UTC, datetime, timedelta
+
+            cutoff = int(
+                (datetime.now(UTC) - timedelta(milliseconds=PENDING_LEASE_TIMEOUT_MS)).timestamp()
+                * 1000
+            )
+            try:
+                stale_turns = await active_convex_client.list_stale_pending_turns(
+                    cutoff_timestamp=cutoff
+                )
+            except Exception:
+                logger.exception("Unable to list stale pending turns")
+                return
+            for turn in stale_turns:
+                turn_id = turn.get("turnId")
+                if not isinstance(turn_id, str):
+                    continue
+                finalization_id = _stable_uuid(TURN_RUN_NAMESPACE, turn_id)
+                payload = {
+                    "finalizationId": finalization_id,
+                    "turnId": turn_id,
+                    "status": "failed",
+                    "errorMessage": "Conversation Turn timed out before starting",
+                    "assistantMessages": [],
+                }
+                try:
+                    await active_convex_client.finalize_turn(payload)
+                except Exception:
+                    logger.exception(
+                        "Unable to finalize stale pending turn",
+                        extra={"turn_id": turn_id},
+                    )
+
+        async def reconcile_invalid_running() -> None:
+            try:
+                invalid_turns = await active_convex_client.list_invalid_running_turns()
+            except Exception:
+                logger.exception("Unable to list invalid running turns")
+                return
+            for turn in invalid_turns:
+                turn_id = turn.get("turnId")
+                if not isinstance(turn_id, str):
+                    continue
+                finalization_id = _stable_uuid(TURN_RUN_NAMESPACE, turn_id)
+                payload = {
+                    "finalizationId": finalization_id,
+                    "turnId": turn_id,
+                    "status": "failed",
+                    "errorMessage": "Conversation Turn has invalid run identifiers",
+                    "assistantMessages": [],
+                }
+                try:
+                    await active_convex_client.finalize_turn(payload)
+                except Exception:
+                    logger.exception(
+                        "Unable to finalize invalid running turn",
+                        extra={"turn_id": turn_id},
+                    )
+
+        await reconcile_stale_pending()
+        await reconcile_invalid_running()
+
         async def replay_outbox() -> None:
             while True:
                 await asyncio.sleep(5)
@@ -283,14 +411,21 @@ def create_app(
                             "Unable to retry turn finalization",
                             extra={"outbox_id": item["outbox_id"]},
                         )
+                await reconcile_stale_pending()
+                await reconcile_invalid_running()
 
         replay_task = asyncio.create_task(replay_outbox())
         try:
             yield
         finally:
             replay_task.cancel()
+            for task in progress_tasks.values():
+                task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await replay_task
+            for task in list(progress_tasks.values()):
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
     app = FastAPI(title="rerAI Backend", version="0.1.0", lifespan=lifespan)
 
@@ -413,29 +548,45 @@ def create_app(
             raise HTTPException(
                 status_code=502, detail="Unable to start Conversation Turn"
             ) from exc
-        subscription = await runtime.orchestrator.start(
-            thread_id=thread_id,
-            assistant_id=GRAPH_ID,
-            run_id=run_id,
-            payload={
-                "input": {
-                    "messages": [
-                        {
-                            "type": "human",
-                            "id": payload.human_message_id,
-                            "content": content,
-                        }
-                    ]
+        try:
+            subscription = await runtime.orchestrator.start(
+                thread_id=thread_id,
+                assistant_id=GRAPH_ID,
+                run_id=run_id,
+                payload={
+                    "input": {
+                        "messages": [
+                            {
+                                "type": "human",
+                                "id": payload.human_message_id,
+                                "content": content,
+                            }
+                        ]
+                    },
+                    "metadata": {
+                        "turn_id": payload.turn_id,
+                        "human_message_id": payload.human_message_id,
+                        "ui_thread_id": payload.ui_thread_id,
+                    },
+                    "stream_mode": ["messages-tuple", "values"],
+                    "on_disconnect": "continue",
                 },
-                "metadata": {
-                    "turn_id": payload.turn_id,
-                    "human_message_id": payload.human_message_id,
-                    "ui_thread_id": payload.ui_thread_id,
-                },
-                "stream_mode": ["messages-tuple", "values"],
-                "on_disconnect": "continue",
-            },
-        )
+            )
+        except Exception as exc:
+            await request.app.state.convex_client.finalize_turn(
+                {
+                    "finalizationId": run_id,
+                    "turnId": payload.turn_id,
+                    "status": "failed",
+                    "errorMessage": "Unable to create Agent Run",
+                    "assistantMessages": [],
+                }
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Unable to create Agent Run",
+                headers={"x-rerai-run-id": run_id},
+            ) from exc
         return {
             "turn_id": payload.turn_id,
             "human_message_id": payload.human_message_id,

@@ -40,9 +40,21 @@ _Avoid_: treating corroborating sources as authoritative
 A non-official source that can help discover candidate identifiers but cannot by itself establish high-confidence evidence.
 _Avoid_: authoritative source
 
+**Conversation**:
+The durable user-visible history containing an ordered sequence of conversation turns.
+_Avoid_: UI thread, chat session, unqualified thread
+
 **Conversation Turn**:
 A user request together with every user-visible assistant message produced before the next user request.
 _Avoid_: treating each assistant message as a separate turn
+
+**Agent Run**:
+The durable execution of agent work for one conversation turn.
+_Avoid_: unqualified run, stream
+
+**Live Turn**:
+A conversation turn whose agent run is active.
+_Avoid_: live run, stream subscription
 
 **Assistant Message**:
 A non-empty textual communication emitted by the top-level rerAI agent within a conversation turn.
@@ -81,7 +93,11 @@ _Avoid_: steer, interrupt
 - A **Research Brief** must include a district, one locality or administrative hint, and one labeled site or project identifier
 - High-confidence **Evidence** requires an **Authoritative Source**
 - A **Corroborating Source** may support discovery but must not establish a high-confidence match by itself
+- A **Conversation** contains zero or more ordered **Conversation Turns**
+- A **Conversation** has at most one non-terminal **Conversation Turn**
 - A **Conversation Turn** begins with exactly one user request and may contain one or more **Assistant Messages**
+- A **Conversation Turn** has exactly one **Agent Run**
+- A **Conversation Turn** is a **Live Turn** while its **Agent Run** remains active
 - Tool activity and delegated work may contribute to a **Conversation Turn** without appearing as **Assistant Messages**
 - Tool-call-only messages and internal subagent messages are not **Assistant Messages**
 - A **Conversation Turn** presents its **Assistant Messages** in order within exactly one **Assistant Response**
@@ -120,6 +136,15 @@ _Avoid_: steer, interrupt
 
 > **Dev:** "If rerAI delegates research and reports progress before its final answer, is that several turns?"
 > **Domain expert:** "No. It is one **Conversation Turn** containing multiple **Assistant Messages**; hidden tool activity and delegated work do not create turns."
+
+> **Dev:** "Is the selected chat the same thing as the LangGraph thread?"
+> **Domain expert:** "No. The selected chat is a **Conversation**; a LangGraph thread is resumable workflow state linked to it."
+
+> **Dev:** "Does closing the browser end the current work?"
+> **Domain expert:** "No. The **Agent Run** is durable and may continue without a browser connection."
+
+> **Dev:** "Does losing live event delivery mean the turn stopped?"
+> **Domain expert:** "No. It remains a **Live Turn** while its **Agent Run** is active."
 
 > **Dev:** "Should each progress update from rerAI appear as another assistant bubble?"
 > **Domain expert:** "No. Present every **Assistant Message** as an ordered block within the turn's single **Assistant Response**."
@@ -166,5 +191,8 @@ _Avoid_: steer, interrupt
 - Parsed user query fields were at risk of being treated as facts; resolved: call them **Search Hints** until confirmed by **Evidence**.
 - Ambiguous identifiers were at risk of triggering speculative searches; resolved: the agent should ask follow-up questions and form a **Research Brief** before lookup.
 - "message" was used to mean both framework events and user-visible chat content; resolved: use **Assistant Message** for visible rerAI communication and **Conversation Turn** for its causal grouping with a user request.
+- "thread" was used to mean both the user-visible history and LangGraph workflow state; resolved: use **Conversation** for the product concept and qualify **LangGraph Thread** whenever referring to workflow state.
+- "run" and "stream" were used interchangeably; resolved: an **Agent Run** is durable execution, while live delivery is only an attachment to it.
+- "live run" was used for both active durable work and its browser connection; resolved: use **Live Turn** for the user-visible active state and keep transport subscriptions as implementation details.
 - Message timestamps were used as conversational ordering keys; resolved: use **Conversation Turn** membership and **Message Position**, keeping timestamps as metadata only.
-- "interrupted" implied a human-in-the-loop pause that rerAI does not support; resolved: explicit user-initiated stopping produces a **Cancelled Turn**.
+- "interrupted" was used for explicit user stopping; resolved: **Stop** produces a **Cancelled Turn**.

@@ -1,5 +1,5 @@
 import { paginationOptsValidator } from "convex/server";
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, query } from "./_generated/server";
 import { v } from "convex/values";
 
 import { getThreadOwnerOrNull } from "./lib/threads";
@@ -42,9 +42,12 @@ export const listByThread = query({
 
         return {
           turnId: turn.turnId,
+          threadId: turn.uiThreadId,
           turnPosition: turn.turnPosition,
           userContent: turn.content,
           status: turn.status,
+          langgraphThreadId: turn.langgraphThreadId,
+          langgraphRunId: turn.langgraphRunId,
           assistantMessages: assistantMessages.map((message) => ({
             id: message.messageId,
             langgraphMessageId: message.langgraphMessageId,
@@ -71,6 +74,72 @@ const terminalStatus = v.union(
   v.literal("failed"),
   v.literal("cancelled"),
 );
+
+export const project = internalMutation({
+  args: {
+    turnId: v.string(),
+    assistantMessages: v.array(
+      v.object({
+        messageId: v.string(),
+        langgraphMessageId: v.optional(v.string()),
+        messagePosition: v.number(),
+        canonicalContent: v.string(),
+        displayOnlyContent: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const turn = await ctx.db
+      .query("conversationTurns")
+      .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
+      .unique();
+    if (turn === null) {
+      throw new Error(`Conversation Turn '${args.turnId}' not found`);
+    }
+    if (
+      turn.status === "completed" ||
+      turn.status === "failed" ||
+      turn.status === "cancelled"
+    ) {
+      return turn;
+    }
+
+    const now = Date.now();
+    for (const message of args.assistantMessages) {
+      const existing = await ctx.db
+        .query("assistantMessages")
+        .withIndex("by_turnId_and_messageId", (q) =>
+          q.eq("turnId", turn._id).eq("messageId", message.messageId),
+        )
+        .unique();
+      if (existing !== null) {
+        await ctx.db.patch(existing._id, {
+          langgraphMessageId:
+            message.langgraphMessageId ?? existing.langgraphMessageId,
+          messagePosition: message.messagePosition,
+          displayOnlyContent: message.displayOnlyContent,
+          updatedAt: now,
+        });
+        continue;
+      }
+      await ctx.db.insert("assistantMessages", {
+        userId: turn.userId,
+        uiThreadId: turn.uiThreadId,
+        turnId: turn._id,
+        messageId: message.messageId,
+        langgraphMessageId: message.langgraphMessageId,
+        messagePosition: message.messagePosition,
+        canonicalContent: "",
+        displayOnlyContent: message.displayOnlyContent,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    await ctx.db.patch(turn._id, { updatedAt: now });
+    return await ctx.db.get(turn._id);
+  },
+});
 
 export const finalize = internalMutation({
   args: {
@@ -179,5 +248,50 @@ export const finalize = internalMutation({
     }
 
     return await ctx.db.get(turn._id);
+  },
+});
+
+export const listStalePending = internalQuery({
+  args: {
+    cutoffTimestamp: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const turns = await ctx.db
+      .query("conversationTurns")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), "pending"),
+          q.lt(q.field("updatedAt"), args.cutoffTimestamp),
+        ),
+      )
+      .collect();
+    return turns.map((turn) => ({
+      turnId: turn.turnId,
+      uiThreadId: turn.uiThreadId,
+      humanMessageId: turn.humanMessageId,
+      content: turn.content,
+      updatedAt: turn.updatedAt,
+    }));
+  },
+});
+
+export const listInvalidRunning = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const turns = await ctx.db
+      .query("conversationTurns")
+      .filter((q) => q.eq(q.field("status"), "running"))
+      .collect();
+    const invalid = turns.filter(
+      (turn) => !turn.langgraphThreadId || !turn.langgraphRunId,
+    );
+    return invalid.map((turn) => ({
+      turnId: turn.turnId,
+      uiThreadId: turn.uiThreadId,
+      humanMessageId: turn.humanMessageId,
+      content: turn.content,
+      langgraphThreadId: turn.langgraphThreadId,
+      langgraphRunId: turn.langgraphRunId,
+    }));
   },
 });

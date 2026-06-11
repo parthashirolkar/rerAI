@@ -6,13 +6,11 @@ import {
   useState,
 } from "react";
 import {
-  extractThreadMessages,
   normalizeMessages,
   selectLiveAssistantMessage,
   selectLiveAssistantMessages,
-  toAssistantMirrorPayload,
 } from "@/lib/messages";
-import type { ChatMessage, ConversationTurn } from "@/lib/messages";
+import type { ChatMessage, ConversationTurn, AssistantMessage } from "@/lib/messages";
 import type {
   UseChatOrchestratorOptions,
   ChatOrchestratorState,
@@ -32,6 +30,16 @@ type ActiveTurn = {
   turnPosition: number;
   createdAt: number;
 };
+
+type DesiredAttachment = {
+  conversationId: string;
+  turnId: string;
+  threadId: string;
+  runId: string;
+};
+
+const MAX_ATTACHMENT_ATTEMPTS = 4;
+const ATTACHMENT_RETRY_BASE_MS = 500;
 
 type SubmitTiming = {
   startedAt: number;
@@ -61,18 +69,8 @@ function markSubmitTiming(timing: SubmitTiming | null, label: string) {
   timing.marks.push({ label, at: performance.now() });
 }
 
-function logSubmitTiming(timing: SubmitTiming | null, label: string) {
-  if (!timing || !chatTimingEnabled()) {
-    return;
-  }
-  const rows = timing.marks.map((mark) => ({
-    event: mark.label,
-    msSinceSubmit: Math.round(mark.at - timing.startedAt),
-  }));
-  console.table([
-    ...rows,
-    { event: label, msSinceSubmit: Math.round(performance.now() - timing.startedAt) },
-  ]);
+function logSubmitTiming(_timing: SubmitTiming | null, _label: string) {
+  // No-op: removed console.table debugging
 }
 
 function hasPersistedEquivalent(
@@ -98,7 +96,6 @@ function orderTranscriptMessages(messages: ChatMessage[]) {
 
 export function useChatOrchestrator({
   backend,
-  persistence,
   useStream,
   authToken,
   turnApi,
@@ -107,156 +104,43 @@ export function useChatOrchestrator({
   const [langgraphThreadId, setLanggraphThreadId] = useState<string | null>(null);
   const [statusNote, setStatusNote] = useState("");
   const [submitInFlight, setSubmitInFlight] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticMessage[]>([]);
   const [activeTurn, setActiveTurn] = useState<ActiveTurn | null>(null);
+  const [failedSubmissions, setFailedSubmissions] = useState<Map<string, string>>(new Map());
+  const [desiredAttachment, setDesiredAttachment] =
+    useState<DesiredAttachment | null>(null);
+  const [attachmentAttempt, setAttachmentAttempt] = useState(0);
+  const [connectionStatus, setConnectionStatus] = useState<
+    "connecting" | "reconnecting" | "finalizing" | null
+  >(null);
+  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
 
-  const selectedThreadIdRef = useRef<string | null>(selectedThreadId);
-  const streamMessagesRef = useRef<unknown[]>([]);
-  const handledInterruptCountRef = useRef(0);
   const submitTimingRef = useRef<SubmitTiming | null>(null);
-
-  useEffect(() => {
-    selectedThreadIdRef.current = selectedThreadId;
-  }, [selectedThreadId]);
 
   // Sync active thread to backend adapter
   useEffect(() => {
     backend.setActiveThread(selectedThreadId);
   }, [backend, selectedThreadId]);
 
-  const recoverBrokenLangGraphThread = useCallback(
-    async (threadId: string | null, message: string) => {
-      const isUnauthorizedThread =
-        message.includes("Unauthorized LangGraph thread access") ||
-        message.includes("Unauthorized thread access");
-      if (!threadId || !isUnauthorizedThread) {
-        return false;
-      }
-
-      try {
-        await backend.detachLangGraphThread(threadId);
-      } catch (error) {
-        setStatusNote(error instanceof Error ? error.message : String(error));
-        return false;
-      }
-
-      setLanggraphThreadId(null);
-      persistence.clearAll();
-      setStatusNote(
-        "This conversation was linked to an invalid LangGraph thread. Send a new message to create a fresh backend session.",
-      );
-      return true;
-    },
-    [backend, persistence],
-  );
-
   const streamCallbacks = useMemo(
     () => ({
       onThreadId(nextThreadId: string) {
         setLanggraphThreadId(nextThreadId);
-        persistence.setThreadId(nextThreadId);
-
-        const activeThreadId = selectedThreadIdRef.current;
-        if (activeThreadId) {
-          void backend
-            .attachLangGraphThread(activeThreadId, nextThreadId)
-            .catch((error) => {
-              setStatusNote(error instanceof Error ? error.message : String(error));
-            });
-        }
       },
-      onCreated(run: { run_id: string }) {
-        const activeThreadId = selectedThreadIdRef.current;
-        if (activeThreadId) {
-          void backend
-            .setRunning(activeThreadId, run.run_id)
-            .catch((error) => {
-              setStatusNote(error instanceof Error ? error.message : String(error));
-            });
-        }
-      },
-      onFinish(state: unknown) {
-        if (turnApi) {
-          persistence.setRunId(null);
-          setStatusNote("");
-          return;
-        }
-        const activeThreadId = selectedThreadIdRef.current;
-        if (activeThreadId) {
-          const finalStateMessages = extractThreadMessages(state);
-          const msgs =
-            finalStateMessages.length > 0
-              ? finalStateMessages
-              : normalizeMessages(streamMessagesRef.current);
-
-          void (async () => {
-            let syncFailed = false;
-            try {
-              await backend.syncAssistantMessages(
-                activeThreadId,
-                toAssistantMirrorPayload(msgs),
-              );
-            } catch (error) {
-              syncFailed = true;
-              setStatusNote(error instanceof Error ? error.message : String(error));
-            }
-
-            try {
-              await backend.setIdle(activeThreadId);
-              if (!syncFailed) {
-                setStatusNote("");
-              }
-            } catch (error) {
-              setStatusNote(error instanceof Error ? error.message : String(error));
-            }
-          })();
-        } else {
-          setStatusNote("");
-        }
-      },
-      onStop() {
-        if (turnApi) {
-          setStatusNote("");
-          return;
-        }
-        const activeThreadId = selectedThreadIdRef.current;
-        if (activeThreadId) {
-          void backend.setIdle(activeThreadId).catch((error) => {
-            setStatusNote(error instanceof Error ? error.message : String(error));
-          });
-        }
+      onCreated() {},
+      onFinish() {
         setStatusNote("");
       },
-      async onError(error: unknown) {
+      onStop() {
+        setStatusNote("");
+      },
+      onError(error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        if (turnApi) {
-          setStatusNote(message);
-          return;
-        }
-        const activeThreadId = selectedThreadIdRef.current;
-        if (await recoverBrokenLangGraphThread(activeThreadId, message)) {
-          if (activeThreadId) {
-            void backend.setIdle(activeThreadId).catch((nextError) => {
-              setStatusNote(
-                nextError instanceof Error ? nextError.message : String(nextError),
-              );
-            });
-          }
-          return;
-        }
-        if (activeThreadId) {
-          void backend
-            .setError(activeThreadId, message)
-            .catch((nextError) => {
-              setStatusNote(
-                nextError instanceof Error ? nextError.message : String(nextError),
-              );
-            });
-        }
         setStatusNote(message);
       },
     }),
-    [backend, persistence, recoverBrokenLangGraphThread, turnApi],
+    [],
   );
 
   const stream = useStream(
@@ -264,29 +148,136 @@ export function useChatOrchestrator({
     streamCallbacks,
   );
 
-  // Keep stream messages ref up to date without triggering re-renders
-  useEffect(() => {
-    streamMessagesRef.current = stream.messages;
-  }, [stream.messages]);
+  const wasLoadingRef = useRef(stream.isLoading);
+  const joinStreamRef = useRef(stream.joinStream);
+  joinStreamRef.current = stream.joinStream;
 
   const selectThread = useCallback(
     (threadId: string | null) => {
       const thread = backend.threads?.find((t) => t._id === threadId) ?? null;
       const nextLanggraphThreadId = thread?.langgraphThreadId ?? null;
-      selectedThreadIdRef.current = threadId;
       setSelectedThreadId(threadId);
       setLanggraphThreadId(nextLanggraphThreadId);
+      setDesiredAttachment(null);
+      setAttachmentAttempt(0);
+      setConnectionStatus(null);
       setStatusNote("");
-      persistence.setRunId(null);
-      if (nextLanggraphThreadId) {
-        persistence.setThreadId(nextLanggraphThreadId);
-      } else {
-        persistence.setThreadId(null);
-      }
       stream.switchThread(nextLanggraphThreadId);
     },
-    [backend, persistence, stream],
+    [backend, stream],
   );
+
+  const selectedLiveTurn = useMemo(() => {
+    if (!selectedThreadId) {
+      return null;
+    }
+    return (
+      [...(backend.turns ?? [])]
+        .reverse()
+        .find(
+          (turn) =>
+            (turn.status === "pending" || turn.status === "running") &&
+            (!turn.threadId || turn.threadId === selectedThreadId),
+        ) ?? null
+    );
+  }, [backend.turns, selectedThreadId]);
+
+  useEffect(() => {
+    if (!selectedThreadId) {
+      setDesiredAttachment(null);
+      return;
+    }
+    if (
+      selectedLiveTurn?.status !== "running" ||
+      !selectedLiveTurn.langgraphThreadId ||
+      !selectedLiveTurn.langgraphRunId
+    ) {
+      if (desiredAttachment?.conversationId !== selectedThreadId) {
+        setDesiredAttachment(null);
+        setConnectionStatus(null);
+      }
+      return;
+    }
+
+    if (
+      desiredAttachment?.conversationId === selectedThreadId &&
+      desiredAttachment.turnId === selectedLiveTurn.turnId &&
+      desiredAttachment.threadId === selectedLiveTurn.langgraphThreadId &&
+      desiredAttachment.runId === selectedLiveTurn.langgraphRunId
+    ) {
+      return;
+    }
+
+    setLanggraphThreadId(selectedLiveTurn.langgraphThreadId);
+    setDesiredAttachment({
+      conversationId: selectedThreadId,
+      turnId: selectedLiveTurn.turnId,
+      threadId: selectedLiveTurn.langgraphThreadId,
+      runId: selectedLiveTurn.langgraphRunId,
+    });
+    setAttachmentAttempt(0);
+    setConnectionStatus("connecting");
+  }, [desiredAttachment, selectedLiveTurn, selectedThreadId]);
+
+  useEffect(() => {
+    if (
+      !desiredAttachment ||
+      desiredAttachment.conversationId !== selectedThreadId ||
+      desiredAttachment.threadId !== langgraphThreadId
+    ) {
+      return;
+    }
+
+    let stale = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    void joinStreamRef.current(desiredAttachment.runId)
+      .then(() => {
+        if (!stale) {
+          setStatusNote("");
+          setConnectionStatus(null);
+        }
+      })
+      .catch(() => {
+        if (stale) {
+          return;
+        }
+        setConnectionStatus("reconnecting");
+        if (attachmentAttempt + 1 < MAX_ATTACHMENT_ATTEMPTS) {
+          retryTimer = setTimeout(() => {
+            setAttachmentAttempt((attempt) => attempt + 1);
+          }, ATTACHMENT_RETRY_BASE_MS * 2 ** attachmentAttempt);
+        }
+      });
+    return () => {
+      stale = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
+    };
+  }, [
+    attachmentAttempt,
+    desiredAttachment,
+    langgraphThreadId,
+    selectedThreadId,
+  ]);
+
+  useEffect(() => {
+    const wasLoading = wasLoadingRef.current;
+    const isLoading = stream.isLoading;
+    wasLoadingRef.current = isLoading;
+
+    if (wasLoading && !isLoading && selectedLiveTurn?.status === "running") {
+      setConnectionStatus("finalizing");
+    }
+    if (selectedLiveTurn?.status && selectedLiveTurn.status !== "running") {
+      setConnectionStatus((current) => {
+        if (current === "finalizing") {
+          return null;
+        }
+        return current;
+      });
+    }
+  }, [stream.isLoading, selectedLiveTurn]);
 
   const createThread = useCallback(async () => {
     const thread = await backend.createThread();
@@ -295,18 +286,44 @@ export function useChatOrchestrator({
 
   const deleteThread = useCallback(
     async (threadId: string) => {
-      if (threadId === selectedThreadId) {
-        selectThread(null);
+      const thread = backend.threads?.find((candidate) => candidate._id === threadId);
+      setDeletingThreadId(threadId);
+      try {
+        if (thread?.activeTurn) {
+          const { langgraphThreadId, langgraphRunId } = thread.activeTurn;
+          if (
+            thread.activeTurn.status !== "running" ||
+            !langgraphThreadId ||
+            !langgraphRunId ||
+            !turnApi
+          ) {
+            setStatusNote(
+              "This conversation is still starting and cannot be deleted yet.",
+            );
+            return;
+          }
+          await turnApi.cancelRun(langgraphThreadId, langgraphRunId);
+        }
+        await backend.removeThread(threadId);
+        if (threadId === selectedThreadId) {
+          selectThread(null);
+        }
+      } catch (error) {
+        setStatusNote(error instanceof Error ? error.message : String(error));
+      } finally {
+        setDeletingThreadId(null);
       }
-      await backend.removeThread(threadId);
     },
-    [backend, selectThread, selectedThreadId],
+    [backend, selectThread, selectedThreadId, turnApi],
   );
 
   const submitMessage = useCallback(
     async (content: string) => {
       const trimmed = content.trim();
       if (!trimmed) {
+        return;
+      }
+      if (selectedLiveTurn) {
         return;
       }
 
@@ -322,11 +339,6 @@ export function useChatOrchestrator({
 
       stream.switchThread(nextThread.langgraphThreadId ?? null);
       markSubmitTiming(submitTimingRef.current, "stream:switchThread");
-      if (nextThread.langgraphThreadId) {
-        persistence.setThreadId(nextThread.langgraphThreadId);
-      } else {
-        persistence.setThreadId(null);
-      }
 
       setOptimisticMessages((current) => [
         ...current,
@@ -342,10 +354,13 @@ export function useChatOrchestrator({
 
       setStatusNote("");
 
+      let turnId: string | undefined;
+      let humanMessageId: string | undefined;
+
       try {
         if (turnApi) {
-          const turnId = globalThis.crypto.randomUUID();
-          const humanMessageId = globalThis.crypto.randomUUID();
+          turnId = globalThis.crypto.randomUUID();
+          humanMessageId = globalThis.crypto.randomUUID();
           setActiveTurn({
             turnId,
             humanMessageId,
@@ -365,46 +380,77 @@ export function useChatOrchestrator({
             content: trimmed,
           });
           setLanggraphThreadId(submitted.threadId);
-          persistence.setThreadId(submitted.threadId);
-          persistence.setRunId(submitted.runId);
           stream.switchThread(submitted.threadId);
-          await stream.joinStream(submitted.runId);
-          markSubmitTiming(submitTimingRef.current, "stream:joinedRun");
+          setDesiredAttachment({
+            conversationId: nextThread._id,
+            turnId: submitted.turnId,
+            threadId: submitted.threadId,
+            runId: submitted.runId,
+          });
           return;
         }
-
-        void Promise.all([
-          backend.appendUserMessage(nextThread._id, trimmed),
-          backend.setRunning(nextThread._id),
-        ])
-          .then(() => {
-            markSubmitTiming(submitTimingRef.current, "convex:persistUserAndRunState");
-          })
-          .catch((error) => {
-            setStatusNote(error instanceof Error ? error.message : String(error));
-          });
 
         await stream.submit(
           { messages: [{ type: "human", content: trimmed }] },
           { streamResumable: true, onDisconnect: "continue" },
         );
         markSubmitTiming(submitTimingRef.current, "stream:submitReturned");
+      } catch (error) {
+        if (turnApi && turnId) {
+          setFailedSubmissions((current) => new Map(current).set(turnId, trimmed));
+        }
+        throw error;
       } finally {
         setSubmitInFlight(false);
       }
     },
-    [backend, persistence, selectedThreadId, selectThread, stream, turnApi],
+    [backend, selectedLiveTurn, selectedThreadId, selectThread, stream, turnApi],
   );
 
   const stop = useCallback(async () => {
-    const threadId = persistence.getThreadId();
-    const runId = persistence.getRunId();
-    if (turnApi && threadId && runId) {
-      await turnApi.cancelRun(threadId, runId);
+    const threadId =
+      selectedLiveTurn?.langgraphThreadId ?? desiredAttachment?.threadId;
+    const runId = selectedLiveTurn?.langgraphRunId ?? desiredAttachment?.runId;
+    setIsStopping(true);
+    try {
+      if (turnApi && threadId && runId) {
+        await turnApi.cancelRun(threadId, runId);
+      }
+      await stream.stop();
+    } finally {
+      setIsStopping(false);
     }
-    await stream.stop();
-    persistence.setRunId(null);
-  }, [persistence, stream, turnApi]);
+  }, [desiredAttachment, selectedLiveTurn, stream, turnApi]);
+
+  const retryTurn = useCallback(
+    async (turnId: string) => {
+      const turn = (backend.turns ?? []).find(
+        (candidate) => candidate.turnId === turnId,
+      );
+      const content = turn?.userContent ?? failedSubmissions.get(turnId);
+      if (!content) {
+        return;
+      }
+      if (turn && turn.status !== "failed" && !failedSubmissions.has(turnId)) {
+        return;
+      }
+      await submitMessage(content);
+      setFailedSubmissions((current) => {
+        const next = new Map(current);
+        next.delete(turnId);
+        return next;
+      });
+    },
+    [backend.turns, failedSubmissions, submitMessage],
+  );
+
+  const reconnect = useCallback(() => {
+    if (!desiredAttachment) {
+      return;
+    }
+    setConnectionStatus("connecting");
+    setAttachmentAttempt(0);
+  }, [desiredAttachment]);
 
   // Auto-deselect deleted threads
   useEffect(() => {
@@ -416,23 +462,6 @@ export function useChatOrchestrator({
       selectThread(null);
     }
   }, [selectedThreadId, selectThread, backend.threads]);
-
-  // Handle interrupts
-  useEffect(() => {
-    const interruptCount = stream.interrupts.length;
-    if (interruptCount === 0) {
-      handledInterruptCountRef.current = 0;
-      return;
-    }
-    if (interruptCount !== handledInterruptCountRef.current) {
-      handledInterruptCountRef.current = interruptCount;
-      setStatusNote("Chat session hit an unexpected pause — started a fresh conversation.");
-      setSelectedThreadId(null);
-      setLanggraphThreadId(null);
-      persistence.clearAll();
-      stream.switchThread(null);
-    }
-  }, [stream.interrupts.length, persistence, stream]);
 
   const normalizedStreamMessages = useMemo(
     () => normalizeMessages(stream.messages),
@@ -526,50 +555,88 @@ export function useChatOrchestrator({
     const turns = [...(backend.turns ?? [])].sort(
       (left, right) => left.turnPosition - right.turnPosition,
     );
-    if (!activeTurn || activeTurn.threadId !== selectedThreadId) {
+    const liveTurn = activeTurn ?? selectedLiveTurn;
+    if (!liveTurn || liveTurn.threadId !== selectedThreadId) {
       return turns;
     }
 
-    const liveMessages = liveAssistantMessages.map((message, index) => ({
-      id:
-        message.id ??
-        message.langgraphMessageId ??
-        `${activeTurn.turnId}-assistant-${index}`,
-      langgraphMessageId: message.langgraphMessageId ?? message.id,
-      messagePosition: message.messagePosition ?? index,
-      canonicalContent: message.content,
-      createdAt: message.createdAt,
-    }));
     const existingIndex = turns.findIndex(
-      (turn) => turn.turnId === activeTurn.turnId,
+      (turn) => turn.turnId === liveTurn.turnId,
     );
+    const failedContent = activeTurn ? failedSubmissions.get(activeTurn.turnId) : undefined;
+    const existing = existingIndex === -1 ? null : turns[existingIndex];
+
+    const persistedByPosition = new Map(
+      (existing?.assistantMessages ?? []).map((message) => [
+        message.messagePosition,
+        message,
+      ]),
+    );
+
+    const liveMessages: AssistantMessage[] = [];
+    for (const message of liveAssistantMessages) {
+      const position = message.messagePosition ?? 0;
+      const persisted = persistedByPosition.get(position);
+      if (persisted) {
+        const liveContent = message.content.trim();
+        const persistedContent = persisted.canonicalContent.trim();
+        if (liveContent === persistedContent) {
+          continue;
+        }
+        if (persistedContent.startsWith(liveContent)) {
+          continue;
+        }
+        if (liveContent.startsWith(persistedContent)) {
+          liveMessages.push({
+            id: persisted.id,
+            langgraphMessageId:
+              message.langgraphMessageId ?? message.id ?? persisted.langgraphMessageId,
+            messagePosition: position,
+            canonicalContent: persisted.canonicalContent,
+            displayOnlyContent: liveContent.slice(persistedContent.length),
+            createdAt: message.createdAt,
+          });
+          continue;
+        }
+        continue;
+      }
+      liveMessages.push({
+        id:
+          message.id ??
+          message.langgraphMessageId ??
+          `${liveTurn.turnId}-assistant-${liveMessages.length}`,
+        langgraphMessageId: message.langgraphMessageId ?? message.id,
+        messagePosition: position,
+        canonicalContent: "",
+        displayOnlyContent: message.content,
+        createdAt: message.createdAt,
+      });
+    }
+
     if (existingIndex === -1) {
       return [
         ...turns,
         {
-          turnId: activeTurn.turnId,
-          turnPosition: activeTurn.turnPosition,
-          userContent: activeTurn.userContent,
-          status: stream.isLoading ? "running" : "pending",
+          turnId: liveTurn.turnId,
+          turnPosition: activeTurn ? activeTurn.turnPosition : liveTurn.turnPosition,
+          userContent: activeTurn ? activeTurn.userContent : liveTurn.userContent,
+          status: failedContent ? "failed" : (stream.isLoading ? "running" : "pending"),
           assistantMessages: liveMessages,
-          createdAt: activeTurn.createdAt,
+          createdAt: activeTurn ? activeTurn.createdAt : liveTurn.createdAt,
+          errorMessage: failedContent ? "Unable to submit" : undefined,
         } satisfies ConversationTurn,
       ];
     }
 
-    const existing = turns[existingIndex];
-    const messagesById = new Map(
-      existing.assistantMessages.map((message) => [message.id, message]),
+    const messagesByPosition = new Map(
+      existing.assistantMessages.map((message) => [message.messagePosition, message]),
     );
     for (const message of liveMessages) {
-      messagesById.set(message.id, {
-        ...messagesById.get(message.id),
-        ...message,
-      });
+      messagesByPosition.set(message.messagePosition, message);
     }
     turns[existingIndex] = {
       ...existing,
-      assistantMessages: [...messagesById.values()].sort(
+      assistantMessages: [...messagesByPosition.values()].sort(
         (left, right) => left.messagePosition - right.messagePosition,
       ),
     };
@@ -579,11 +646,28 @@ export function useChatOrchestrator({
     backend.turns,
     liveAssistantMessages,
     selectedThreadId,
+    selectedLiveTurn,
     stream.isLoading,
+    failedSubmissions,
   ]);
 
-  const busy = submitInFlight || stream.isLoading || backend.runState?.status === "running";
-  const isInterrupted = backend.runState?.status === "interrupted";
+  const busy =
+    submitInFlight ||
+    isStopping ||
+    stream.isLoading ||
+    selectedLiveTurn?.status === "pending" ||
+    selectedLiveTurn?.status === "running";
+  const canStop =
+    Boolean(
+      selectedLiveTurn?.status === "running" &&
+        selectedLiveTurn.langgraphThreadId &&
+        selectedLiveTurn.langgraphRunId,
+    ) ||
+    Boolean(
+      desiredAttachment &&
+        desiredAttachment.conversationId === selectedThreadId,
+    );
+  const isInterrupted = false;
 
   const selectedThread = useMemo(
     () => backend.threads?.find((thread) => thread._id === selectedThreadId) ?? null,
@@ -596,8 +680,11 @@ export function useChatOrchestrator({
     selectedThread,
     messages: displayMessages,
     turns: displayTurns,
-    runState: backend.runState ?? null,
     isStreaming: stream.isLoading,
+    isStopping,
+    canStop,
+    connectionStatus,
+    deletingThreadId,
     showThinking,
     busy,
     statusNote: statusNote || null,
@@ -607,6 +694,8 @@ export function useChatOrchestrator({
     createThread,
     deleteThread,
     submitMessage,
+    retryTurn,
     stop,
+    reconnect,
   };
 }
