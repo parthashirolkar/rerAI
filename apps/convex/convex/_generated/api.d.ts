@@ -15,8 +15,8 @@ import type * as lib_auth from "../lib/auth.js";
 import type * as lib_threads from "../lib/threads.js";
 import type * as messages from "../messages.js";
 import type * as preferences from "../preferences.js";
-import type * as runState from "../runState.js";
 import type * as threads from "../threads.js";
+import type * as turns from "../turns.js";
 import type * as users from "../users.js";
 
 import type {
@@ -33,8 +33,8 @@ declare const fullApi: ApiFromModules<{
   "lib/threads": typeof lib_threads;
   messages: typeof messages;
   preferences: typeof preferences;
-  runState: typeof runState;
   threads: typeof threads;
+  turns: typeof turns;
   users: typeof users;
 }>;
 

@@ -1,5 +1,8 @@
 import type { Id } from "@convex-generated/dataModel";
-import type { ChatMessage, AssistantMirrorPayload } from "@/lib/messages";
+import type {
+  ChatMessage,
+  ConversationTurn,
+} from "@/lib/messages";
 
 export type Viewer = {
   name?: string;
@@ -13,31 +16,23 @@ export type Thread = {
   langgraphThreadId?: string;
   updatedAt: number;
   userId?: Id<"users">;
-};
-
-export type RunState = {
-  status: "idle" | "running" | "error" | "interrupted";
-  langgraphRunId?: string;
-  errorMessage?: string;
+  activeTurn?: {
+    status: "pending" | "running";
+    langgraphThreadId?: string;
+    langgraphRunId?: string;
+  };
 };
 
 export interface BackendPort {
   viewer: Viewer | null | undefined;
   threads: Thread[] | undefined;
-  runState: RunState | null | undefined;
   messages: ChatMessage[] | undefined;
+  turns?: ConversationTurn[] | undefined;
 
   setActiveThread(threadId: string | null): void;
   ensureViewer(): Promise<void>;
   createThread(): Promise<Thread>;
   removeThread(threadId: string): Promise<void>;
-  attachLangGraphThread(threadId: string, langgraphThreadId: string): Promise<void>;
-  detachLangGraphThread(threadId: string): Promise<void>;
-  appendUserMessage(threadId: string, content: string): Promise<void>;
-  syncAssistantMessages(threadId: string, messages: AssistantMirrorPayload[]): Promise<void>;
-  setRunning(threadId: string, langgraphRunId?: string): Promise<void>;
-  setError(threadId: string, errorMessage: string): Promise<void>;
-  setIdle(threadId: string): Promise<void>;
 }
 
 export interface StreamState {
@@ -46,11 +41,33 @@ export interface StreamState {
   error: Error | null;
   interrupts: unknown[];
   switchThread(threadId: string | null): void;
+  joinStream(runId: string): Promise<void>;
   submit(
     payload: { messages: Array<{ type: string; content: string }> },
     options: { streamResumable: boolean; onDisconnect: "continue" },
   ): Promise<void>;
-  stop(): void;
+  stop(): void | Promise<void>;
+}
+
+export type TurnSubmission = {
+  turnId: string;
+  humanMessageId: string;
+  uiThreadId: string;
+  content: string;
+};
+
+export type SubmittedTurn = {
+  turnId: string;
+  humanMessageId: string;
+  threadId: string;
+  runId: string;
+};
+
+export interface TurnApiPort {
+  submitTurn(payload: TurnSubmission): Promise<SubmittedTurn>;
+  cancelRun(threadId: string, runId: string): Promise<{
+    status: "completed" | "failed" | "cancelled";
+  }>;
 }
 
 export interface StreamCallbacks {
@@ -66,19 +83,11 @@ export type UseStreamAdapter = (
   callbacks: StreamCallbacks,
 ) => StreamState;
 
-export interface PersistencePort {
-  getThreadId(): string | null;
-  setThreadId(id: string | null): void;
-  getRunId(): string | null;
-  setRunId(id: string | null): void;
-  clearAll(): void;
-}
-
 export interface UseChatOrchestratorOptions {
   backend: BackendPort;
-  persistence: PersistencePort;
   useStream: UseStreamAdapter;
   authToken: string | null;
+  turnApi?: TurnApiPort;
 }
 
 export interface ChatOrchestratorState {
@@ -86,8 +95,12 @@ export interface ChatOrchestratorState {
   threads: Thread[];
   selectedThread: Thread | null;
   messages: ChatMessage[];
-  runState: RunState | null;
+  turns: ConversationTurn[];
   isStreaming: boolean;
+  isStopping: boolean;
+  canStop: boolean;
+  connectionStatus: "connecting" | "reconnecting" | "finalizing" | null;
+  deletingThreadId: string | null;
   showThinking: boolean;
   busy: boolean;
   statusNote: string | null;
@@ -100,5 +113,7 @@ export interface ChatOrchestratorActions {
   createThread(): Promise<void>;
   deleteThread(threadId: string): Promise<void>;
   submitMessage(content: string): Promise<void>;
-  stop(): void;
+  retryTurn(turnId: string): Promise<void>;
+  stop(): Promise<void>;
+  reconnect(): void;
 }

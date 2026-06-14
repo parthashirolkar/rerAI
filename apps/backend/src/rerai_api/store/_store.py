@@ -198,6 +198,15 @@ class Store:
         with self._connect() as conn:
             return self._fetch_run(conn, run_id)
 
+    def list_running_runs(self) -> list[RunRecord]:
+        with self._connect() as conn:
+            rows = self._engine.fetchall(
+                conn,
+                "select * from rerai_runs where status = %s order by created_at asc",
+                "running",
+            )
+        return [self._row_to_run(row) for row in rows]
+
     def finish_run(
         self,
         run_id: str,
@@ -291,6 +300,85 @@ class Store:
                 after,
             )
         return [self._row_to_event(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Durable projection outbox
+    # ------------------------------------------------------------------
+    def enqueue_outbox(self, outbox_id: str, payload: dict[str, Any]) -> None:
+        now = _utc_now().isoformat()
+        with self._connect() as conn:
+            existing = self._engine.fetchone(
+                conn,
+                "select outbox_id from rerai_outbox where outbox_id = %s",
+                outbox_id,
+            )
+            if existing is not None:
+                return
+            self._engine.execute(
+                conn,
+                """
+                insert into rerai_outbox (
+                    outbox_id, payload, attempts, created_at, updated_at
+                ) values (%s, %s, %s, %s, %s)
+                """,
+                outbox_id,
+                self._dialect.adapt_json(payload),
+                0,
+                now,
+                now,
+            )
+
+    def list_pending_outbox(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = self._engine.fetchall(
+                conn,
+                """
+                select outbox_id, payload, attempts
+                from rerai_outbox
+                where delivered_at is null
+                order by created_at asc
+                limit %s
+                """,
+                limit,
+            )
+        return [
+            {
+                "outbox_id": str(row["outbox_id"]),
+                "payload": self._dialect.read_json(row["payload"], fallback={}),
+                "attempts": int(row["attempts"]),
+            }
+            for row in rows
+        ]
+
+    def mark_outbox_delivered(self, outbox_id: str) -> None:
+        now = _utc_now().isoformat()
+        with self._connect() as conn:
+            self._engine.execute(
+                conn,
+                """
+                update rerai_outbox
+                set delivered_at = %s, updated_at = %s, last_error = null
+                where outbox_id = %s
+                """,
+                now,
+                now,
+                outbox_id,
+            )
+
+    def mark_outbox_failed(self, outbox_id: str, error: str) -> None:
+        now = _utc_now().isoformat()
+        with self._connect() as conn:
+            self._engine.execute(
+                conn,
+                """
+                update rerai_outbox
+                set attempts = attempts + 1, last_error = %s, updated_at = %s
+                where outbox_id = %s
+                """,
+                error,
+                now,
+                outbox_id,
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -30,13 +30,13 @@ def _default_memory_files() -> list[str | Path]:
 def _default_tools() -> list[Callable]:
     from rerai_agent.factories import default_registry
 
-    return list(default_registry().assemble().tools)
+    return list(default_registry().assemble(resolve_models=False).tools)
 
 
 def _default_subagents() -> list[Any]:
     from rerai_agent.factories import default_registry
 
-    return list(default_registry().assemble().subagents)
+    return list(default_registry().assemble(resolve_models=False).subagents)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +47,7 @@ class AgentHubConfig:
     subagent_model: str = "nvidia/nemotron-3-nano-30b-a3b:free"
     embedding_model: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    embedding_base_url: str | None = None
     memory_files: Sequence[str | Path] = field(default_factory=_default_memory_files)
     skills_dir: str | Path | None = field(
         default_factory=lambda: str(_DEFAULT_SKILLS_DIR)
@@ -73,10 +74,28 @@ class AgentHubConfig:
 
         api_key = os.environ.get("OPENROUTER_API_KEY")
         database_uri = os.environ.get("DATABASE_URI")
+        setup_db = os.environ.get("LANGGRAPH_SETUP_DB", "true").lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+
+        defaults = cls.__dataclass_fields__
 
         return cls(
             database_uri=database_uri or None,
             openrouter_api_key=SecretStr(api_key) if api_key else None,
+            chat_model=os.environ.get("CHAT_MODEL")
+            or defaults["chat_model"].default,
+            subagent_model=os.environ.get("SUBAGENT_MODEL")
+            or defaults["subagent_model"].default,
+            embedding_model=os.environ.get("EMBEDDING_MODEL")
+            or defaults["embedding_model"].default,
+            openrouter_base_url=os.environ.get("OPENROUTER_BASE_URL")
+            or defaults["openrouter_base_url"].default,
+            embedding_base_url=os.environ.get("EMBEDDING_BASE_URL")
+            or None,
+            setup_db=setup_db,
         )
 
     @classmethod
@@ -216,6 +235,7 @@ class AgentHub(AbstractAsyncContextManager):
                 chat_model=self.config.chat_model,
                 embedding_model=self.config.embedding_model,
                 base_url=self.config.openrouter_base_url,
+                embedding_base_url=self.config.embedding_base_url,
             )
         return self._model_provider
 
@@ -324,7 +344,9 @@ def build_graph(
 
     if registry is None:
         registry = default_registry()
-    config = registry.assemble()
+    config = registry.assemble(
+        resolve_models=bool(os.environ.get("OPENROUTER_API_KEY"))
+    )
     return create_deep_agent(
         model=config.model,
         tools=config.tools,

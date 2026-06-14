@@ -58,8 +58,13 @@ class Registry:
         memory: list[str] | None = None,
         skills: list[str] | None = None,
         system_prompt: str | None = None,
+        resolve_models: bool = True,
     ) -> AssembledConfig:
-        chat_model = self._chat_model_factory() if self._chat_model_factory else None
+        chat_model = (
+            self._chat_model_factory()
+            if resolve_models and self._chat_model_factory
+            else None
+        )
 
         tools = list(self._tools.values())
 
@@ -67,25 +72,25 @@ class Registry:
         for spec in self._subagents.values():
             subagent_model = (
                 spec.model_factory()
-                if spec.model_factory
+                if resolve_models and spec.model_factory
                 else (
                     self._subagent_model_factory()
-                    if self._subagent_model_factory
+                    if resolve_models and self._subagent_model_factory
                     else None
                 )
             )
             subagent_tools = [
                 self._tools[name] for name in spec.tool_names if name in self._tools
             ]
-            subagents.append(
-                {
-                    "name": spec.name,
-                    "description": spec.description,
-                    "system_prompt": spec.system_prompt,
-                    "model": subagent_model,
-                    "tools": subagent_tools,
-                }
-            )
+            subagent: dict[str, Any] = {
+                "name": spec.name,
+                "description": spec.description,
+                "system_prompt": spec.system_prompt,
+                "tools": subagent_tools,
+            }
+            if subagent_model is not None:
+                subagent["model"] = subagent_model
+            subagents.append(subagent)
 
         return AssembledConfig(
             model=chat_model,

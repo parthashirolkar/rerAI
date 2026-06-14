@@ -110,7 +110,7 @@ export const syncAssistantMessages = mutation({
         }
       }
 
-      const createdAt = message.createdAt ?? Date.now();
+      const createdAt = Math.max(Date.now(), lastCreatedAt + 1);
       await ctx.db.insert("uiMessages", {
         userId,
         threadId: thread._id,

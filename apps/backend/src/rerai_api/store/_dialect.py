@@ -84,6 +84,17 @@ class _PostgresDialect:
             )
             """,
             """
+            create table if not exists rerai_outbox (
+                outbox_id text primary key,
+                payload jsonb not null,
+                attempts integer not null default 0,
+                last_error text null,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now(),
+                delivered_at timestamptz null
+            )
+            """,
+            """
             create index if not exists rerai_runs_thread_created_idx
             on rerai_runs (thread_id, created_at desc)
             """,
@@ -155,6 +166,17 @@ class _SqliteDialect:
                 data text null,
                 created_at text not null default current_timestamp,
                 primary key (run_id, stream_id)
+            )
+            """,
+            """
+            create table if not exists rerai_outbox (
+                outbox_id text primary key,
+                payload text not null,
+                attempts integer not null default 0,
+                last_error text null,
+                created_at text not null default current_timestamp,
+                updated_at text not null default current_timestamp,
+                delivered_at text null
             )
             """,
             "create index if not exists rerai_runs_thread_created_idx on rerai_runs (thread_id, created_at desc)",

@@ -4,7 +4,7 @@ import { useConvexAuth } from "convex/react";
 import { useChatOrchestrator } from "./useChatOrchestrator";
 import { useConvexBackendAdapter } from "./adapters/convexBackendAdapter";
 import { useLangGraphStreamAdapter } from "./adapters/langGraphStreamAdapter";
-import { createLocalStoragePersistenceAdapter } from "./adapters/localStoragePersistenceAdapter";
+import { createBackendTurnApiAdapter } from "./adapters/backendTurnApiAdapter";
 import type { ChatOrchestratorState, ChatOrchestratorActions } from "./ports";
 
 export function useChatSession(): ChatOrchestratorState & ChatOrchestratorActions {
@@ -14,7 +14,10 @@ export function useChatSession(): ChatOrchestratorState & ChatOrchestratorAction
   const [statusNote, setStatusNote] = useState("");
 
   const backend = useConvexBackendAdapter(viewerReady);
-  const persistence = useMemo(() => createLocalStoragePersistenceAdapter(), []);
+  const turnApi = useMemo(
+    () => createBackendTurnApiAdapter(authToken),
+    [authToken],
+  );
 
   const ensureViewer = useCallback(async () => {
     try {
@@ -29,17 +32,16 @@ export function useChatSession(): ChatOrchestratorState & ChatOrchestratorAction
   useEffect(() => {
     if (!isAuthenticated) {
       setViewerReady(false);
-      persistence.clearAll();
       return;
     }
     void ensureViewer();
-  }, [isAuthenticated, persistence, ensureViewer]);
+  }, [isAuthenticated, ensureViewer]);
 
   const orchestrator = useChatOrchestrator({
     backend,
-    persistence,
     useStream: useLangGraphStreamAdapter,
     authToken,
+    turnApi,
   });
 
   return {

@@ -36,6 +36,127 @@ export const getThreadByLangGraphThreadId = query({
   },
 });
 
+export const ensureTurn = mutation({
+  args: {
+    uiThreadId: v.id("uiThreads"),
+    turnId: v.string(),
+    humanMessageId: v.string(),
+    content: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { userId } = await getViewer(ctx);
+    const thread = await ctx.db.get(args.uiThreadId);
+    if (thread === null || thread.userId !== userId || thread.archivedAt !== undefined) {
+      throw new Error("Unauthorized");
+    }
+
+    const content = args.content.trim();
+    if (!content) {
+      throw new Error("Message cannot be empty");
+    }
+
+    const existing = await ctx.db
+      .query("conversationTurns")
+      .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
+      .unique();
+    if (existing !== null) {
+      return existing;
+    }
+
+    const latestTurn = await ctx.db
+      .query("conversationTurns")
+      .withIndex("by_uiThreadId_and_turnPosition", (q) =>
+        q.eq("uiThreadId", thread._id),
+      )
+      .order("desc")
+      .first();
+    if (
+      latestTurn?.status === "pending" ||
+      latestTurn?.status === "running"
+    ) {
+      throw new Error("Conversation already has an active turn");
+    }
+    const now = Date.now();
+    const turnId = await ctx.db.insert("conversationTurns", {
+      userId,
+      uiThreadId: thread._id,
+      turnId: args.turnId,
+      humanMessageId: args.humanMessageId,
+      content,
+      turnPosition: (latestTurn?.turnPosition ?? -1) + 1,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await ctx.db.patch(thread._id, {
+      title:
+        thread.titleSource === "auto" && thread.messageCount === 0
+          ? args.content.trim().replace(/\s+/g, " ").slice(0, 60)
+          : thread.title,
+      lastMessagePreview: content.slice(0, 160),
+      messageCount: thread.messageCount + 1,
+      lastMessageAt: now,
+      updatedAt: now,
+    });
+
+    return await ctx.db.get(turnId);
+  },
+});
+
+export const markTurnRunning = mutation({
+  args: {
+    turnId: v.string(),
+    langgraphThreadId: v.string(),
+    langgraphRunId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { userId } = await getViewer(ctx);
+    const turn = await ctx.db
+      .query("conversationTurns")
+      .withIndex("by_turnId", (q) => q.eq("turnId", args.turnId))
+      .unique();
+    if (turn === null || turn.userId !== userId) {
+      throw new Error("Unauthorized");
+    }
+    if (
+      turn.langgraphRunId !== undefined &&
+      turn.langgraphRunId !== args.langgraphRunId
+    ) {
+      throw new Error("Conversation Turn is already linked to another run");
+    }
+    if (
+      turn.status === "completed" ||
+      turn.status === "failed" ||
+      turn.status === "cancelled"
+    ) {
+      return turn;
+    }
+
+    const thread = await ctx.db.get(turn.uiThreadId);
+    if (thread === null || thread.userId !== userId) {
+      throw new Error("Unauthorized");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(turn._id, {
+      status: "running",
+      langgraphThreadId: args.langgraphThreadId,
+      langgraphRunId: args.langgraphRunId,
+      updatedAt: now,
+    });
+    if (thread.langgraphThreadId === undefined) {
+      await ctx.db.patch(thread._id, {
+        langgraphThreadId: args.langgraphThreadId,
+        updatedAt: now,
+      });
+    } else if (thread.langgraphThreadId !== args.langgraphThreadId) {
+      throw new Error("Thread is already linked to another LangGraph thread");
+    }
+    return await ctx.db.get(turn._id);
+  },
+});
+
 export const attachLangGraphThread = mutation({
   args: {
     threadId: v.id("uiThreads"),

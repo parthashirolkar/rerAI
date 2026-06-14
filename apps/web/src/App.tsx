@@ -33,7 +33,6 @@ import {
 import { Composer } from "./components/Composer";
 import { ReportPanel } from "./components/ReportPanel";
 import { Transcript } from "./components/Transcript";
-import { clearSessionPersistence } from "./hooks/useSessionPersistence";
 import { useChatSession } from "./chat/useChatSession";
 import { parsePermitReport } from "./lib/report";
 
@@ -61,7 +60,6 @@ export default function App() {
       <Authenticated>
         <ErrorBoundary
           onReset={() => {
-            clearSessionPersistence();
             setResetKey((k) => k + 1);
           }}
         >
@@ -85,13 +83,28 @@ function AuthenticatedApp() {
   const isReady = chat.viewer !== null;
 
   const latestAssistantMarkdown = useMemo(() => {
+    for (let turnIndex = chat.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+      const turn = chat.turns[turnIndex];
+      if (!turn) continue;
+      for (
+        let messageIndex = turn.assistantMessages.length - 1;
+        messageIndex >= 0;
+        messageIndex -= 1
+      ) {
+        const message = turn.assistantMessages[messageIndex];
+        const content = `${message?.canonicalContent ?? ""}${message?.displayOnlyContent ?? ""}`;
+        if (content) {
+          return content;
+        }
+      }
+    }
     for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
       if (chat.messages[index]?.role === "assistant") {
         return chat.messages[index]?.content ?? "";
       }
     }
     return "";
-  }, [chat.messages]);
+  }, [chat.messages, chat.turns]);
 
   const report = useMemo(
     () => parsePermitReport(latestAssistantMarkdown),
@@ -199,7 +212,11 @@ function AuthenticatedApp() {
                     }}
                     aria-label="Delete conversation"
                   >
-                    <X className="size-3" />
+                    {chat.deletingThreadId === thread._id ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <X className="size-3" />
+                    )}
                   </Button>
                 </span>
                 <span className="flex-1 truncate">{thread.title}</span>
@@ -260,10 +277,15 @@ function AuthenticatedApp() {
                 rerAI
               </span>
 
-              {chat.busy ? (
+              {chat.connectionStatus ? (
                 <Badge variant="secondary" className="gap-1.5 text-[10px]">
                   <Loader2 className="size-3 animate-spin" />
-                  {chat.isInterrupted ? "Review Required" : "Thinking"}
+                  Catching up
+                </Badge>
+              ) : chat.busy ? (
+                <Badge variant="secondary" className="gap-1.5 text-[10px]">
+                  <Loader2 className="size-3 animate-spin" />
+                  {chat.isStopping ? "Stopping" : "Thinking"}
                 </Badge>
               ) : null}
             </div>
@@ -291,7 +313,6 @@ function AuthenticatedApp() {
                     variant="ghost"
                     size="sm"
                     onClick={() => {
-                      clearSessionPersistence();
                       signOut();
                     }}
                   >
@@ -309,17 +330,22 @@ function AuthenticatedApp() {
           <div className="relative flex min-h-0 flex-1 overflow-hidden">
             <div className={`flex min-h-0 flex-1 flex-col overflow-hidden ${showReport ? "border-r" : ""}`}>
               <Transcript
-                hasMessages={chat.messages.length > 0}
+                hasMessages={chat.turns.length > 0 || chat.messages.length > 0}
                 isStreaming={chat.isStreaming}
                 showThinking={chat.showThinking}
                 messages={chat.messages}
+                turns={chat.turns}
                 sampleQueries={SAMPLE_QUERIES}
+                onRetryTurn={(turnId) => void chat.retryTurn(turnId)}
                 onUseSample={(sample) => startTransition(() => setDraft(sample))}
               />
               <Composer
                 busy={chat.busy}
+                canStop={chat.canStop}
                 draft={draft}
+                isStopping={chat.isStopping}
                 onChange={setDraft}
+                onStop={chat.stop}
                 onSubmit={submitDraft}
               />
             </div>
@@ -331,7 +357,16 @@ function AuthenticatedApp() {
             ) : null}
           </div>
 
-          {chat.statusNote ? (
+          {chat.connectionStatus === "reconnecting" ? (
+            <div className="flex items-center justify-center gap-2 border-t bg-muted/30 px-4 py-2">
+              <p className="text-xs text-muted-foreground">
+                Live updates are reconnecting.
+              </p>
+              <Button variant="ghost" size="xs" onClick={chat.reconnect}>
+                Reconnect
+              </Button>
+            </div>
+          ) : chat.statusNote ? (
             <div className="border-t bg-destructive/5 px-4 py-2">
               <p className="text-xs text-destructive">{chat.statusNote}</p>
             </div>
